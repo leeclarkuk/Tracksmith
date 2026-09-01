@@ -1,0 +1,85 @@
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import fs from 'node:fs';
+import { loadConfig } from './config.js';
+import { CardStore } from './db/store.js';
+import { EngineRouter } from './engine/router.js';
+import { GatewayClient } from './gateway/client.js';
+import { GatewayListener } from './gateway/listener.js';
+import { reconcileRunningCards } from './reconcile.js';
+import { Projector } from './gateway/projector.js';
+import { registerRoutes } from './routes.js';
+
+const config = loadConfig();
+const store = new CardStore(config.databasePath);
+const gateway = new GatewayClient(config);
+const router = new EngineRouter(store, gateway, config.gatewayUrl);
+const projector = new Projector(gateway);
+
+const sseClients = new Set<(payload: string) => void>();
+
+function broadcast(): void {
+  const payload = JSON.stringify({ type: 'refresh', cards: store.list() });
+  for (const send of sseClients) send(payload);
+}
+
+const app = Fastify({ logger: true });
+
+await app.register(cors, { origin: true });
+registerRoutes(app, store, gateway, router, broadcast);
+
+app.get('/api/stream', async (req, reply) => {
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (payload: string) => reply.raw.write(`data: ${payload}\n\n`);
+  send(JSON.stringify({ type: 'refresh', cards: store.list() }));
+  sseClients.add(send);
+  req.raw.on('close', () => sseClients.delete(send));
+});
+
+if (fs.existsSync(config.webDistPath)) {
+  await app.register(fastifyStatic, {
+    root: config.webDistPath,
+    prefix: '/',
+  });
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api')) {
+      reply.code(404).send({ error: 'Not found' });
+    } else {
+      reply.sendFile('index.html');
+    }
+  });
+}
+
+const listener = new GatewayListener(gateway, store, broadcast);
+
+async function runReconcile(): Promise<void> {
+  const reconciled = await reconcileRunningCards(store, gateway, projector);
+  if (reconciled > 0) {
+    console.log(`[reconcile] updated ${reconciled} running card(s)`);
+    broadcast();
+  }
+}
+
+listener.setReconcile(runReconcile);
+
+async function start(): Promise<void> {
+  await runReconcile();
+  listener.start();
+  await app.listen({ port: config.port, host: config.host });
+  console.log(`Tracksmith listening on http://${config.host}:${config.port}`);
+}
+
+start().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => {
+  listener.stop();
+  process.exit(0);
+});
