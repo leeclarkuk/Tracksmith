@@ -17,6 +17,16 @@ export function normalizeGoalContract(input?: Partial<GoalContract>): GoalContra
   };
 }
 
+function matchWithoutLeadingNegation(text: string, pattern: RegExp): boolean {
+  for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.includes('i') ? 'gi' : 'g'))) {
+    const index = match.index ?? 0;
+    const before = text.slice(Math.max(0, index - 24), index);
+    if (/\b(not|no|without|never|didn't|did not|failed to)\s*$/i.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
 export function evaluateAcceptanceCriteria(
   criteria: string[],
   corpus: string,
@@ -36,27 +46,39 @@ export function evaluateAcceptanceCriteria(
     let matched: boolean;
     if (negated) {
       let prohibited = false;
-      if (failureCriterion || /\berror/i.test(subjectLower)) {
-        prohibited = /\b(error|fail(ed|s|ure)?)\b/i.test(lower);
+      if (lower.includes(lowerNeedle)) {
+        matched = true;
+      } else if (failureCriterion || /\berror/i.test(subjectLower)) {
+        prohibited = matchWithoutLeadingNegation(lower, /\b(error|fail(ed|s|ure)?)\b/i);
+        matched = !prohibited;
       } else if (passCriterion) {
-        prohibited = /\bfail(ed|s|ure)?\b/i.test(lower);
+        prohibited = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
+        matched = !prohibited;
       } else if (subjectTokens.length > 0) {
-        const hits = subjectTokens.filter((t) => lower.includes(t)).length;
-        prohibited = hits >= Math.ceil(subjectTokens.length * 0.75);
+        prohibited = subjectTokens.some((t) =>
+          matchWithoutLeadingNegation(lower, new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')),
+        );
+        matched = !prohibited;
       } else if (subjectLower.length > 0) {
-        prohibited = lower.includes(subjectLower);
+        matched = !matchWithoutLeadingNegation(lower, new RegExp(subjectLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+      } else {
+        matched = true;
       }
-      matched = !prohibited;
     } else {
       const tokens = lowerNeedle.split(/\s+/).filter((t) => t.length > 3);
-      const tokenHits = tokens.length > 0 ? tokens.filter((t) => lower.includes(t)).length : 0;
+      const tokenHits =
+        tokens.length > 0
+          ? tokens.filter((t) => matchWithoutLeadingNegation(lower, new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'))).length
+          : 0;
       const fuzzyMatch = tokens.length > 0 && tokenHits >= Math.ceil(tokens.length * 0.75);
-      const exactMatch = lower.includes(lowerNeedle);
+      const exactMatch = matchWithoutLeadingNegation(lower, new RegExp(lowerNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
       matched = exactMatch || fuzzyMatch;
       if (failureCriterion) {
-        matched = /\bfail(ed|s|ure)?\b/i.test(lower);
+        matched = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
       } else if (passCriterion) {
-        matched = /\bpass(ed|es)?\b/i.test(lower) && !/\bfail(ed|s|ure)?\b/i.test(lower);
+        matched =
+          matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) &&
+          !matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
       }
     }
 

@@ -60,7 +60,7 @@ export async function reconcileRunningCards(
       }
 
       if (card.runRef.kind === 'task_runner' && card.runRef.taskId) {
-        return reconcileTaskCard(card, gateway, projector, store);
+        return reconcileTaskCard(card, gateway, projector);
       }
 
       return null;
@@ -98,22 +98,22 @@ async function reconcileChatCard(
   }
 
   const historyResult = await gateway.getSlotHistoryResult(slotId, 3);
-  if (settleFromHistory || hasDeferredSettlement(card)) {
-    if (historyResult.status === 'unreachable') {
-      audit(card, 'Reconcile skipped: gateway unreachable reading slot history');
-      return card;
-    }
-    if (historyResult.status === 'ok') {
-      const last = historyResult.data![historyResult.data!.length - 1];
-      if (last?.role === 'assistant') {
-        audit(
-          card,
-          hasDeferredSettlement(card)
-            ? 'Retrying deferred chat settlement from slot history'
-            : 'Settling chat from slot history on startup',
-        );
-        return projector.settleChat(card, false);
-      }
+  if (historyResult.status === 'unreachable') {
+    audit(card, 'Reconcile skipped: gateway unreachable reading slot history');
+    return card;
+  }
+  if (historyResult.status === 'ok') {
+    const last = historyResult.data![historyResult.data!.length - 1];
+    if (last?.role === 'assistant') {
+      audit(
+        card,
+        hasDeferredSettlement(card)
+          ? 'Retrying deferred chat settlement from slot history'
+          : settleFromHistory
+            ? 'Settling chat from slot history on startup'
+            : 'Settling missed chat completion from slot history on reconnect',
+      );
+      return projector.settleChat(card, false);
     }
   }
   return null;
@@ -123,7 +123,6 @@ async function reconcileTaskCard(
   card: OutcomeCard,
   gateway: GatewayClient,
   projector: Projector,
-  store: CardStore,
 ): Promise<OutcomeCard | null> {
   const taskId = card.runRef!.taskId!;
   const runResult = await gateway.getTaskRunResult(taskId);
@@ -151,7 +150,7 @@ async function reconcileTaskCard(
       audit(card, 'Retrying deferred task settlement from Host run record');
     }
     if (card.goalContract?.continueUntilVerified) {
-      return settleWithGoalContract(card, run, store, projector);
+      return settleWithGoalContract(card, run, projector);
     }
     return projector.settleTask(card, run);
   }

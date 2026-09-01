@@ -3,7 +3,8 @@ import WebSocket from 'ws';
 import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import { Projector } from '../gateway/projector.js';
-import { settleChatWithGoalContract, settleWithGoalContract } from '../goal-eval.js';
+import { settleChatWithGoalContract, settleWithGoalContract, shouldAutoRetryGoal } from '../goal-eval.js';
+import type { EngineRouter } from '../engine/router.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
 
 interface GatewayEvent {
@@ -29,6 +30,7 @@ export class GatewayListener {
     private store: CardStore,
     private pending: PendingRunRegistry,
     private onUpdate: () => void,
+    private router?: EngineRouter,
   ) {
     this.projector = new Projector(gateway);
   }
@@ -95,6 +97,12 @@ export class GatewayListener {
     return this.store.findByRunRef(kind, id)?.id;
   }
 
+  private async maybeAutoRetryGoal(card: OutcomeCard): Promise<void> {
+    if (!this.router || !shouldAutoRetryGoal(card)) return;
+    await this.router.run(card);
+    this.onUpdate();
+  }
+
   private clearPendingForCard(card: OutcomeCard): void {
     if (card.column !== 'running') {
       this.pending.clear(card.id);
@@ -124,13 +132,15 @@ export class GatewayListener {
       await this.store.mutate(cardId, async (card) => {
         if (card.column !== 'running') return null;
         if (card.goalContract?.continueUntilVerified) {
-          const settled = await settleChatWithGoalContract(card, this.store, this.projector, false);
+          const settled = await settleChatWithGoalContract(card, this.projector, false);
           if (settled) this.clearPendingForCard(settled);
           return settled;
         }
         const settled = await this.projector.settleChat(card, false);
         if (settled) this.clearPendingForCard(settled);
         return settled;
+      }).then((updated) => {
+        if (updated) void this.maybeAutoRetryGoal(updated);
       });
       this.onUpdate();
       return;
@@ -175,7 +185,10 @@ export class GatewayListener {
 
     if (type === 'task_complete' && taskId) {
       const cardId = this.resolveCardId('task_runner', taskId);
-      if (!cardId) return;
+      if (!cardId) {
+        this.pending.noteTaskComplete(taskId);
+        return;
+      }
       await this.store.mutate(cardId, async (card) => {
         if (card.column !== 'running') {
           if (!card.runRef?.taskId) {
@@ -198,12 +211,14 @@ export class GatewayListener {
         const run = runResult.status === 'ok' ? (runResult.data ?? null) : null;
         let settled: OutcomeCard | null | undefined;
         if (card.goalContract?.continueUntilVerified) {
-          settled = await settleWithGoalContract(card, run, this.store, this.projector);
+          settled = await settleWithGoalContract(card, run, this.projector);
         } else {
           settled = await this.projector.settleTask(card, run);
         }
         if (settled) this.clearPendingForCard(settled);
         return settled;
+      }).then((updated) => {
+        if (updated) void this.maybeAutoRetryGoal(updated);
       });
       this.onUpdate();
     }

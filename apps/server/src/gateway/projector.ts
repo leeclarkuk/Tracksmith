@@ -89,7 +89,7 @@ export class Projector {
           kind: 'recovery',
           message: `Settlement deferred: ${historyResult.message ?? historyResult.status}`,
         });
-        return null;
+        return card;
       }
       const history = historyResult.status === 'ok' ? historyResult.data! : [];
       card.resultPacket = buildResultFromChatHistory(history, failed, error);
@@ -118,14 +118,26 @@ export class Projector {
           kind: 'recovery',
           message: `Settlement deferred: ${result.message ?? result.status}`,
         });
-        return null;
+        return card;
+      }
+      if (result.status === 'not_found') {
+        card.audit.push({
+          id: nanoid(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: 'Settlement deferred: task run record not yet available',
+        });
+        return card;
       }
       record = result.status === 'ok' ? (result.data ?? null) : null;
     }
     if (!record) {
-      card.column = 'failed';
-      card.failureReason = 'Task run record not found';
-      card.settledAt = new Date().toISOString();
+      card.audit.push({
+        id: nanoid(),
+        at: new Date().toISOString(),
+        kind: 'recovery',
+        message: 'Settlement deferred: task run record empty',
+      });
       return card;
     }
     card.resultPacket = buildResultFromTaskRun(record);

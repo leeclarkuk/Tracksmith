@@ -16,6 +16,16 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(false);
   });
 
+  it('does not treat negated pass wording as success', () => {
+    const checks = evaluateAcceptanceCriteria(['tests pass'], 'Tests did not pass on staging');
+    expect(checks[0]?.passed).toBe(false);
+  });
+
+  it('passes without-criteria when subject absent', () => {
+    const checks = evaluateAcceptanceCriteria(['without regressions'], 'Completed without regressions in staging');
+    expect(checks[0]?.passed).toBe(true);
+  });
+
   it('fails when criterion missing', () => {
     const checks = evaluateAcceptanceCriteria(['database migrated'], 'Updated README only');
     expect(checks[0]?.passed).toBe(false);

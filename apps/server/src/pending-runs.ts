@@ -4,6 +4,7 @@ export class PendingRunRegistry {
   private byCard = new Map<string, PendingKind>();
   private slotToCard = new Map<string, string>();
   private taskToCard = new Map<string, string>();
+  private completedTasks = new Set<string>();
 
   start(cardId: string, kind: PendingKind): void {
     this.clearForCard(cardId);
@@ -18,6 +19,18 @@ export class PendingRunRegistry {
   attachTask(cardId: string, taskId: string): void {
     this.taskToCard.set(taskId, cardId);
     this.byCard.delete(cardId);
+  }
+
+  noteTaskComplete(taskId: string): void {
+    if (!this.taskToCard.has(taskId)) {
+      this.completedTasks.add(taskId);
+    }
+  }
+
+  consumeCompletedTask(taskId: string): boolean {
+    if (!this.completedTasks.has(taskId)) return false;
+    this.completedTasks.delete(taskId);
+    return true;
   }
 
   clear(cardId: string): void {

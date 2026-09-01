@@ -1,7 +1,7 @@
 import type { Column, CreateCardInput, OutcomeCard } from '@tracksmith/shared';
 
 const BASE = '';
-const API_TOKEN = import.meta.env.DEV ? (import.meta.env.VITE_TRACKSMITH_API_TOKEN as string | undefined) : undefined;
+const API_TOKEN = import.meta.env.VITE_TRACKSMITH_API_TOKEN as string | undefined;
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };

@@ -1,11 +1,13 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { canTransitionColumn, resolveEngine } from '@tracksmith/shared';
+import { canTransitionColumn, resolveEngine, type Engine } from '@tracksmith/shared';
 import type { ServerConfig } from './config.js';
 import type { CardStore } from './db/store.js';
 import type { EngineRouter } from './engine/router.js';
 import { normalizeGoalContract } from './goal-contract.js';
 import type { GatewayClient } from './gateway/client.js';
 
+const ALLOWED_ENGINES: Engine[] = ['chat', 'task_runner', 'autopilot', 'auto'];
+const CREATE_COLUMNS = new Set(['backlog', 'todo']);
 function notFound(reply: FastifyReply, message: string) {
   return reply.code(404).send({ error: message });
 }
@@ -57,7 +59,15 @@ export function registerRoutes(
       goalContract?: { continueUntilVerified?: boolean; acceptanceCriteria?: string[] };
     };
     if (!body.prompt?.trim()) return badRequest(reply, 'prompt is required');
-    const engine = (body.engine ?? 'auto') as 'chat' | 'task_runner' | 'autopilot' | 'auto';
+    const engineRaw = body.engine ?? 'auto';
+    if (!ALLOWED_ENGINES.includes(engineRaw as Engine)) {
+      return badRequest(reply, `Invalid engine: ${engineRaw}`);
+    }
+    const engine = engineRaw as Engine;
+    const column = body.column ?? 'todo';
+    if (!CREATE_COLUMNS.has(column)) {
+      return badRequest(reply, 'Cards may only be created in backlog or todo');
+    }
 
     if (body.goalContract?.continueUntilVerified) {
       const resolved = resolveEngine(engine, body.prompt.trim());
@@ -88,7 +98,7 @@ export function registerRoutes(
       {
         prompt: body.prompt.trim(),
         engine,
-        column: body.column ?? 'todo',
+        column,
         goalContract,
       },
       title,
@@ -101,16 +111,21 @@ export function registerRoutes(
   app.patch('/api/cards/:id/column', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { column } = req.body as { column?: string };
-    const card = store.get(id);
-    if (!card) return notFound(reply, 'Card not found');
     if (!column) return badRequest(reply, 'column is required');
-    if (!canTransitionColumn(card.column, column as never)) {
-      return badRequest(reply, `Invalid transition ${card.column} → ${column}`);
+    try {
+      const updated = await store.mutate(id, (card) => {
+        if (!canTransitionColumn(card.column, column as never)) {
+          throw new Error(`Invalid transition ${card.column} → ${column}`);
+        }
+        card.column = column as typeof card.column;
+        return card;
+      });
+      if (!updated) return notFound(reply, 'Card not found');
+      broadcast();
+      return updated;
+    } catch (err) {
+      return badRequest(reply, err instanceof Error ? err.message : 'Invalid column transition');
     }
-    card.column = column as typeof card.column;
-    store.save(card);
-    broadcast();
-    return card;
   });
 
   app.post('/api/cards/:id/run', async (req, reply) => {

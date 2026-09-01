@@ -58,7 +58,7 @@ if (fs.existsSync(config.webDistPath)) {
   });
 }
 
-const listener = new GatewayListener(gateway, store, pending, broadcast);
+const listener = new GatewayListener(gateway, store, pending, broadcast, router);
 
 async function runReconcile(startup = false): Promise<void> {
   const reconciled = await reconcileRunningCards(store, gateway, projector, {

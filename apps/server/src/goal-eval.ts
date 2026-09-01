@@ -1,5 +1,4 @@
 import type { OutcomeCard } from '@tracksmith/shared';
-import type { CardStore } from './db/store.js';
 import type { TaskRunRecord } from './gateway/client.js';
 import { Projector } from './gateway/projector.js';
 import {
@@ -10,16 +9,15 @@ import {
 } from './goal-contract.js';
 
 function buildCorpus(card: OutcomeCard, run: TaskRunRecord | null, extra = ''): string {
-  const runStartedAt = card.goalContract?.startedAt
-    ? new Date(card.goalContract.startedAt).getTime()
-    : undefined;
+  const attemptStart = card.goalContract?.attemptStartedAt ?? card.goalContract?.startedAt;
+  const attemptStartedAt = attemptStart ? new Date(attemptStart).getTime() : undefined;
   const runSteps = (run?.steps ?? [])
-    .map((s) => `${s.result ?? ''} ${s.error ?? ''}`.trim())
+    .map((s) => `${s.title ?? ''} ${s.status ?? ''} ${s.result ?? ''} ${s.error ?? ''}`.trim())
     .filter(Boolean)
     .join('\n');
-  const currentRunEvidence = runStartedAt
+  const currentRunEvidence = attemptStartedAt
     ? card.evidence
-        .filter((e) => new Date(e.createdAt).getTime() >= runStartedAt)
+        .filter((e) => new Date(e.createdAt).getTime() >= attemptStartedAt)
         .map((e) => `${e.label} ${e.value}`)
         .join('\n')
     : '';
@@ -34,7 +32,6 @@ function buildCorpus(card: OutcomeCard, run: TaskRunRecord | null, extra = ''): 
 export async function settleWithGoalContract(
   card: OutcomeCard,
   run: TaskRunRecord | null,
-  store: CardStore,
   projector: Projector,
 ): Promise<OutcomeCard> {
   const contract = card.goalContract;
@@ -47,35 +44,28 @@ export async function settleWithGoalContract(
     card.column = 'failed';
     card.failureReason = 'Task run record unavailable at settlement';
     card.settledAt = new Date().toISOString();
-    store.save(card);
     return card;
   }
 
-  let settled = await projector.settleTask(card, run);
-  if (!settled) return card;
+  const settled = await projector.settleTask(card, run);
+  if (!settled || settled.column === 'running') return settled ?? card;
   const corpus = buildCorpus(settled, run);
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
-  const passed = allChecksPassed(
-    evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus).length
-      ? evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus)
-      : settled.resultPacket!.checks,
-  );
-
-  return evaluateGoalContractLimits(settled, passed, store);
+  const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
+  const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
+  return evaluateGoalContractLimits(settled, passed);
 }
 
 export async function settleChatWithGoalContract(
   card: OutcomeCard,
-  store: CardStore,
   projector: Projector,
   failed: boolean,
   error?: string,
 ): Promise<OutcomeCard> {
   const contract = card.goalContract;
-  let settled = await projector.settleChat(card, failed, error);
-  if (!settled) return card;
+  const settled = await projector.settleChat(card, failed, error);
+  if (!settled || settled.column === 'running') return settled ?? card;
   if (!contract?.continueUntilVerified || failed) {
-    store.save(settled);
     return settled;
   }
 
@@ -83,13 +73,12 @@ export async function settleChatWithGoalContract(
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
   const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
   const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
-  return evaluateGoalContractLimits(settled, passed, store);
+  return evaluateGoalContractLimits(settled, passed);
 }
 
 export function evaluateGoalContractLimits(
   settled: OutcomeCard,
   verificationPassed: boolean,
-  store: CardStore,
 ): OutcomeCard {
   const contract = settled.goalContract!;
   const tokens = contract.tokenUsed;
@@ -98,7 +87,6 @@ export function evaluateGoalContractLimits(
     : 0;
 
   if (verificationPassed) {
-    store.save(settled);
     return settled;
   }
 
@@ -112,7 +100,6 @@ export function evaluateGoalContractLimits(
     settled.failureReason = 'Goal contract limits exhausted before acceptance criteria passed';
     settled.resultPacket!.nextActions = ['Relax acceptance criteria or increase limits, then retry'];
     settled.settledAt = new Date().toISOString();
-    store.save(settled);
     return settled;
   }
 
@@ -120,15 +107,20 @@ export function evaluateGoalContractLimits(
   settled.failureReason = undefined;
   settled.settledAt = undefined;
   settled.resultPacket!.nextActions = [
-    'Acceptance criteria not met. Review checks and run again.',
+    'Acceptance criteria not met. Auto-retry scheduled.',
     ...settled.resultPacket!.nextActions,
   ];
   settled.audit.push({
     id: crypto.randomUUID(),
     at: new Date().toISOString(),
     kind: 'goal_retry',
-    message: `Attempt ${contract.attemptCount}/${contract.maxAttempts} did not pass acceptance criteria`,
+    message: `Attempt ${contract.attemptCount}/${contract.maxAttempts} did not pass acceptance criteria; queued for retry`,
   });
-  store.save(settled);
   return settled;
+}
+
+export function shouldAutoRetryGoal(card: OutcomeCard): boolean {
+  if (card.column !== 'todo' || !card.goalContract?.continueUntilVerified) return false;
+  const last = card.audit[card.audit.length - 1];
+  return last?.kind === 'goal_retry';
 }

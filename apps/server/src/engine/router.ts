@@ -9,6 +9,8 @@ import {
 import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
+import { Projector } from '../gateway/projector.js';
+import { settleWithGoalContract } from '../goal-eval.js';
 
 export class EngineRouter {
   constructor(
@@ -49,6 +51,7 @@ export class EngineRouter {
 
       if (current.goalContract?.continueUntilVerified) {
         current.goalContract.startedAt = current.goalContract.startedAt ?? new Date().toISOString();
+        current.goalContract.attemptStartedAt = new Date().toISOString();
       }
 
       current.failureReason = undefined;
@@ -96,7 +99,32 @@ export class EngineRouter {
         current.goalContract.attemptCount += 1;
       }
       return current;
+    }).then(async (updated) => {
+      if (!updated?.runRef?.taskId) return updated;
+      const needsFastSettle =
+        this.pending.consumeCompletedTask(updated.runRef.taskId) ||
+        (await this.isTaskAlreadyTerminal(updated.runRef.taskId));
+      if (!needsFastSettle) return updated;
+      const settled = await this.store.mutate(updated.id, async (card) => {
+        const taskId = card.runRef?.taskId;
+        if (card.column !== 'running' || !taskId || taskId !== updated.runRef?.taskId) return null;
+        const runResult = await this.gateway.getTaskRunResult(taskId);
+        if (runResult.status !== 'ok' || !runResult.data) return card;
+        const run = runResult.data;
+        if (card.goalContract?.continueUntilVerified) {
+          return settleWithGoalContract(card, run, new Projector(this.gateway));
+        }
+        return new Projector(this.gateway).settleTask(card, run);
+      });
+      return settled ?? updated;
     }) as Promise<OutcomeCard>;
+  }
+
+  private async isTaskAlreadyTerminal(taskId: string): Promise<boolean> {
+    const runResult = await this.gateway.getTaskRunResult(taskId);
+    if (runResult.status !== 'ok' || !runResult.data) return false;
+    const status = runResult.data.status;
+    return status === 'completed' || status === 'done' || status === 'failed' || status === 'cancelled';
   }
 
   async correct(card: OutcomeCard, instruction: string): Promise<OutcomeCard> {
