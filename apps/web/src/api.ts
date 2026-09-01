@@ -1,10 +1,19 @@
-import type { Column, CreateCardInput, Engine, OutcomeCard } from '@tracksmith/shared';
+import type { Column, CreateCardInput, OutcomeCard } from '@tracksmith/shared';
 
 const BASE = '';
+const API_TOKEN = import.meta.env.DEV ? (import.meta.env.VITE_TRACKSMITH_API_TOKEN as string | undefined) : undefined;
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (API_TOKEN) {
+    headers.Authorization = `Bearer ${API_TOKEN}`;
+  }
+  return headers;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { ...authHeaders(), ...init?.headers },
     ...init,
   });
   if (!res.ok) {
@@ -28,7 +37,8 @@ export const api = {
 };
 
 export function subscribeCards(onUpdate: (cards: OutcomeCard[]) => void): () => void {
-  const es = new EventSource('/api/stream');
+  const streamUrl = API_TOKEN ? `/api/stream?token=${encodeURIComponent(API_TOKEN)}` : '/api/stream';
+  const es = new EventSource(streamUrl);
   es.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data) as { cards?: OutcomeCard[] };

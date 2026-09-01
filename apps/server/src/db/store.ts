@@ -220,4 +220,20 @@ export class CardStore {
     card.evidence = [...card.evidence, { ...item, id: nanoid(), createdAt: new Date().toISOString() }];
     return this.save(card);
   }
+
+  private locks = new Map<string, Promise<void>>();
+
+  async mutate(id: string, fn: (card: OutcomeCard) => Promise<OutcomeCard | null> | OutcomeCard | null): Promise<OutcomeCard | null> {
+    const prev = this.locks.get(id) ?? Promise.resolve();
+    let result: OutcomeCard | null = null;
+    const next = prev.then(async () => {
+      const card = this.get(id);
+      if (!card) return;
+      const updated = await fn({ ...card, evidence: [...card.evidence], audit: [...card.audit] });
+      if (updated) result = this.save(updated);
+    });
+    this.locks.set(id, next.then(() => undefined).catch(() => undefined));
+    await next;
+    return result;
+  }
 }

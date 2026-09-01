@@ -79,9 +79,23 @@ export function buildResultFromTaskRun(run: TaskRunRecord): ResultPacket {
 export class Projector {
   constructor(private gateway: GatewayClient) {}
 
-  async settleChat(card: OutcomeCard, failed: boolean, error?: string): Promise<OutcomeCard> {
-    const history = card.runRef?.slotId ? await this.gateway.getSlotHistory(card.runRef.slotId) : [];
-    card.resultPacket = buildResultFromChatHistory(history, failed, error);
+  async settleChat(card: OutcomeCard, failed: boolean, error?: string): Promise<OutcomeCard | null> {
+    if (!failed && card.runRef?.slotId) {
+      const historyResult = await this.gateway.getSlotHistoryResult(card.runRef.slotId);
+      if (historyResult.status === 'unreachable' || historyResult.status === 'error') {
+        card.audit.push({
+          id: nanoid(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: `Settlement deferred: ${historyResult.message ?? historyResult.status}`,
+        });
+        return null;
+      }
+      const history = historyResult.status === 'ok' ? historyResult.data! : [];
+      card.resultPacket = buildResultFromChatHistory(history, failed, error);
+    } else {
+      card.resultPacket = buildResultFromChatHistory([], failed, error);
+    }
     card.column = failed ? 'failed' : 'done';
     card.failureReason = failed ? (error ?? 'Chat error') : undefined;
     card.settledAt = new Date().toISOString();
@@ -92,9 +106,22 @@ export class Projector {
     return card;
   }
 
-  async settleTask(card: OutcomeCard, run?: TaskRunRecord | null): Promise<OutcomeCard> {
+  async settleTask(card: OutcomeCard, run?: TaskRunRecord | null): Promise<OutcomeCard | null> {
     const taskId = card.runRef?.taskId;
-    const record = run ?? (taskId ? await this.gateway.getTaskRun(taskId) : null);
+    let record = run ?? null;
+    if (!record && taskId) {
+      const result = await this.gateway.getTaskRunResult(taskId);
+      if (result.status === 'unreachable' || result.status === 'error') {
+        card.audit.push({
+          id: nanoid(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: `Settlement deferred: ${result.message ?? result.status}`,
+        });
+        return null;
+      }
+      record = result.status === 'ok' ? (result.data ?? null) : null;
+    }
     if (!record) {
       card.column = 'failed';
       card.failureReason = 'Task run record not found';

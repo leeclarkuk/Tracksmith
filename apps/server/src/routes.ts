@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { canTransitionColumn } from '@tracksmith/shared';
+import { canTransitionColumn, resolveEngine } from '@tracksmith/shared';
+import type { ServerConfig } from './config.js';
 import type { CardStore } from './db/store.js';
 import type { EngineRouter } from './engine/router.js';
+import { normalizeGoalContract } from './goal-contract.js';
 import type { GatewayClient } from './gateway/client.js';
 
 function notFound(reply: FastifyReply, message: string) {
@@ -10,6 +12,23 @@ function notFound(reply: FastifyReply, message: string) {
 
 function badRequest(reply: FastifyReply, message: string) {
   return reply.code(400).send({ error: message });
+}
+
+export function registerAuth(app: FastifyInstance, config: ServerConfig): void {
+  if (!config.apiToken) return;
+
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/') || req.url === '/api/health') return;
+    const header = req.headers.authorization;
+    const query = req.query as { token?: string };
+    const queryToken = typeof query.token === 'string' ? query.token : undefined;
+    const token = header?.startsWith('Bearer ')
+      ? header.slice(7)
+      : (req.headers['x-tracksmith-token'] ?? queryToken);
+    if (token !== config.apiToken) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
 }
 
 export function registerRoutes(
@@ -35,10 +54,20 @@ export function registerRoutes(
       prompt?: string;
       engine?: string;
       column?: 'backlog' | 'todo';
-      goalContract?: Record<string, unknown>;
+      goalContract?: { continueUntilVerified?: boolean; acceptanceCriteria?: string[] };
     };
     if (!body.prompt?.trim()) return badRequest(reply, 'prompt is required');
     const engine = (body.engine ?? 'auto') as 'chat' | 'task_runner' | 'autopilot' | 'auto';
+
+    if (body.goalContract?.continueUntilVerified) {
+      const resolved = resolveEngine(engine, body.prompt.trim());
+      if (resolved !== 'task_runner') {
+        return badRequest(
+          reply,
+          'Continue until verified requires Task Runner (choose Task Runner or Auto with a structured prompt)',
+        );
+      }
+    }
 
     let title: string | undefined;
     let summary: string | undefined;
@@ -48,12 +77,19 @@ export function registerRoutes(
       summary = derived.summary;
     }
 
+    let goalContract;
+    try {
+      goalContract = normalizeGoalContract(body.goalContract as never);
+    } catch (err) {
+      return badRequest(reply, err instanceof Error ? err.message : 'Invalid goal contract');
+    }
+
     const card = store.create(
       {
         prompt: body.prompt.trim(),
         engine,
         column: body.column ?? 'todo',
-        goalContract: body.goalContract as never,
+        goalContract,
       },
       title,
       summary,

@@ -147,13 +147,16 @@ export function DetailDrawer({ card, onClose, onRefresh }: Props) {
 
           {tab === 'changes' && (
             <div className="drawer-section">
-              {[...card.evidence, ...(packet?.artifacts ?? [])]
-                .filter((e) => 'kind' in e && (e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path'))
-                .map((e, i) => (
-                  <div key={i} className="artifact-link">
-                    {'label' in e ? e.label : e.value}: {'value' in e ? e.value : ''}
-                  </div>
-                ))}
+              {[
+                ...card.evidence.filter((e) => e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path'),
+                ...(packet?.artifacts ?? []).filter(
+                  (a) => a.kind === 'commit' || a.kind === 'branch' || a.kind === 'path',
+                ),
+              ].map((e, i) => (
+                <div key={i} className="artifact-link">
+                  {e.label}: {e.value}
+                </div>
+              ))}
               {card.evidence.filter((e) => e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path').length === 0 && (
                 <p style={{ color: 'var(--text-muted)' }}>No change artifacts recorded.</p>
               )}

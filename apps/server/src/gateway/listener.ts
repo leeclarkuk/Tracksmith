@@ -1,8 +1,10 @@
+import type { OutcomeCard } from '@tracksmith/shared';
 import WebSocket from 'ws';
 import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import { Projector } from '../gateway/projector.js';
-import { evaluateGoalContract } from '../goal-contract.js';
+import { settleChatWithGoalContract, settleWithGoalContract } from '../goal-eval.js';
+import type { PendingRunRegistry } from '../pending-runs.js';
 
 interface GatewayEvent {
   type?: string;
@@ -25,6 +27,7 @@ export class GatewayListener {
   constructor(
     private gateway: GatewayClient,
     private store: CardStore,
+    private pending: PendingRunRegistry,
     private onUpdate: () => void,
   ) {
     this.projector = new Projector(gateway);
@@ -86,65 +89,123 @@ export class GatewayListener {
     }, 5000);
   }
 
+  private resolveCardId(kind: 'chat' | 'task_runner', id: string): string | undefined {
+    const pending = kind === 'chat' ? this.pending.cardForSlot(id) : this.pending.cardForTask(id);
+    if (pending) return pending;
+    return this.store.findByRunRef(kind, id)?.id;
+  }
+
+  private clearPendingForCard(card: OutcomeCard): void {
+    if (card.column !== 'running') {
+      this.pending.clear(card.id);
+    }
+  }
+
   private async handleEvent(event: GatewayEvent): Promise<void> {
     const type = event.type ?? event.event ?? '';
     const slotId = event.slot_id ?? event.slotId;
     const taskId = event.task_id ?? event.taskId;
 
     if (type === 'tool_call') {
-      const card = slotId
-        ? this.store.findByRunRef('chat', slotId)
+      const cardId = slotId
+        ? this.resolveCardId('chat', slotId)
         : taskId
-          ? this.store.findByRunRef('task_runner', taskId)
+          ? this.resolveCardId('task_runner', taskId)
           : undefined;
-      if (card) {
-        this.store.save(this.projector.handleToolCall(card, event));
-        this.onUpdate();
-      }
+      if (!cardId) return;
+      await this.store.mutate(cardId, (card) => this.projector.handleToolCall(card, event));
+      this.onUpdate();
       return;
     }
 
     if (type === 'chat_done' && slotId) {
-      const card = this.store.findByRunRef('chat', slotId);
-      if (card && card.column === 'running') {
+      const cardId = this.resolveCardId('chat', slotId);
+      if (!cardId) return;
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running') return null;
+        if (card.goalContract?.continueUntilVerified) {
+          const settled = await settleChatWithGoalContract(card, this.store, this.projector, false);
+          if (settled) this.clearPendingForCard(settled);
+          return settled;
+        }
         const settled = await this.projector.settleChat(card, false);
-        this.store.save(settled);
-        this.onUpdate();
-      }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'chat_error' && slotId) {
-      const card = this.store.findByRunRef('chat', slotId);
-      if (card && card.column === 'running') {
+      const cardId = this.resolveCardId('chat', slotId);
+      if (!cardId) return;
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running') return null;
         const settled = await this.projector.settleChat(card, true, event.error ?? event.message ?? 'chat_error');
-        this.store.save(settled);
-        this.onUpdate();
-      }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'task_update' && taskId) {
-      const card = this.store.findByRunRef('task_runner', taskId);
-      if (card) {
-        const message = String(event.message ?? event.status ?? type);
-        this.store.appendAudit(card, 'recovery', `Task update: ${message}`);
-        this.store.appendEvidence(card, { kind: 'note', label: 'Task update', value: message.slice(0, 500) });
-        this.onUpdate();
-      }
+      const cardId = this.resolveCardId('task_runner', taskId);
+      if (!cardId) return;
+      const message = String(event.message ?? event.status ?? type);
+      await this.store.mutate(cardId, (card) => {
+        card.audit.push({
+          id: crypto.randomUUID(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: `Task update: ${message}`,
+        });
+        card.evidence.push({
+          id: crypto.randomUUID(),
+          kind: 'note',
+          label: 'Task update',
+          value: message.slice(0, 500),
+          createdAt: new Date().toISOString(),
+        });
+        return card;
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'task_complete' && taskId) {
-      const card = this.store.findByRunRef('task_runner', taskId);
-      if (card && card.column === 'running') {
-        const run = await this.gateway.getTaskRun(taskId);
-        const settled = card.goalContract?.continueUntilVerified
-          ? await evaluateGoalContract(card, run, this.store, this.projector)
-          : await this.projector.settleTask(card, run);
-        this.store.save(settled);
-        this.onUpdate();
-      }
+      const cardId = this.resolveCardId('task_runner', taskId);
+      if (!cardId) return;
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running') {
+          if (!card.runRef?.taskId) {
+            card.column = 'running';
+            card.runRef = { kind: 'task_runner', taskId, sessionKey: `taskrunner:${taskId}` };
+          } else {
+            return null;
+          }
+        }
+        const runResult = await this.gateway.getTaskRunResult(taskId);
+        if (runResult.status === 'unreachable' || runResult.status === 'error') {
+          card.audit.push({
+            id: crypto.randomUUID(),
+            at: new Date().toISOString(),
+            kind: 'recovery',
+            message: `Task settlement deferred: ${runResult.message ?? runResult.status}`,
+          });
+          return card;
+        }
+        const run = runResult.status === 'ok' ? (runResult.data ?? null) : null;
+        let settled: OutcomeCard | null | undefined;
+        if (card.goalContract?.continueUntilVerified) {
+          settled = await settleWithGoalContract(card, run, this.store, this.projector);
+        } else {
+          settled = await this.projector.settleTask(card, run);
+        }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      });
+      this.onUpdate();
     }
   }
 }

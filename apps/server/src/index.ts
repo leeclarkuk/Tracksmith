@@ -9,12 +9,14 @@ import { GatewayClient } from './gateway/client.js';
 import { GatewayListener } from './gateway/listener.js';
 import { reconcileRunningCards } from './reconcile.js';
 import { Projector } from './gateway/projector.js';
-import { registerRoutes } from './routes.js';
+import { PendingRunRegistry } from './pending-runs.js';
+import { registerAuth, registerRoutes } from './routes.js';
 
 const config = loadConfig();
 const store = new CardStore(config.databasePath);
 const gateway = new GatewayClient(config);
-const router = new EngineRouter(store, gateway, config.gatewayUrl);
+const pending = new PendingRunRegistry();
+const router = new EngineRouter(store, gateway, config.gatewayUrl, pending);
 const projector = new Projector(gateway);
 
 const sseClients = new Set<(payload: string) => void>();
@@ -26,7 +28,8 @@ function broadcast(): void {
 
 const app = Fastify({ logger: true });
 
-await app.register(cors, { origin: true });
+await app.register(cors, { origin: config.corsOrigin });
+registerAuth(app, config);
 registerRoutes(app, store, gateway, router, broadcast);
 
 app.get('/api/stream', async (req, reply) => {
@@ -55,20 +58,22 @@ if (fs.existsSync(config.webDistPath)) {
   });
 }
 
-const listener = new GatewayListener(gateway, store, broadcast);
+const listener = new GatewayListener(gateway, store, pending, broadcast);
 
-async function runReconcile(): Promise<void> {
-  const reconciled = await reconcileRunningCards(store, gateway, projector);
+async function runReconcile(startup = false): Promise<void> {
+  const reconciled = await reconcileRunningCards(store, gateway, projector, {
+    settleChatFromHistory: startup,
+  });
   if (reconciled > 0) {
     console.log(`[reconcile] updated ${reconciled} running card(s)`);
     broadcast();
   }
 }
 
-listener.setReconcile(runReconcile);
+listener.setReconcile(() => runReconcile(false));
 
 async function start(): Promise<void> {
-  await runReconcile();
+  await runReconcile(true);
   listener.start();
   await app.listen({ port: config.port, host: config.host });
   console.log(`Tracksmith listening on http://${config.host}:${config.port}`);

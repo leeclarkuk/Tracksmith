@@ -1,4 +1,5 @@
 import type { ServerConfig } from '../config.js';
+import type { GatewayReadResult } from './types.js';
 
 export interface GatewayStatus {
   ok: boolean;
@@ -117,25 +118,67 @@ export class GatewayClient {
     return slot;
   }
 
-  async listSlots(): Promise<GatewaySlot[]> {
+  async listSlotsResult(): Promise<GatewayReadResult<GatewaySlot[]>> {
+    const result = await this.requestResult<{ slots?: GatewaySlot[] } | GatewaySlot[]>('GET', '/api/slots');
+    if (result.status !== 'ok') return result as GatewayReadResult<GatewaySlot[]>;
+    const data = result.data!;
+    return { status: 'ok', data: Array.isArray(data) ? data : (data.slots ?? []) };
+  }
+
+  async getSlotHistoryResult(slotId: string, limit = 50): Promise<GatewayReadResult<GatewayMessage[]>> {
+    const result = await this.requestResult<{ messages?: GatewayMessage[]; history?: GatewayMessage[] }>(
+      'GET',
+      `/api/slots/${encodeURIComponent(slotId)}/history?limit=${limit}`,
+    );
+    if (result.status !== 'ok') return result as GatewayReadResult<GatewayMessage[]>;
+    const data = result.data!;
+    return { status: 'ok', data: data.messages ?? data.history ?? [] };
+  }
+
+  async getTaskRunResult(taskId: string): Promise<GatewayReadResult<TaskRunRecord>> {
+    return this.requestResult<TaskRunRecord>('GET', `/api/taskrunner/${encodeURIComponent(taskId)}`);
+  }
+
+  private async requestResult<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<GatewayReadResult<T>> {
     try {
-      const data = await this.request<{ slots?: GatewaySlot[] } | GatewaySlot[]>('GET', '/api/slots');
-      return Array.isArray(data) ? data : (data.slots ?? []);
-    } catch {
-      return [];
+      const url = `${this.config.gatewayUrl}${path}`;
+      const res = await fetch(url, {
+        method,
+        headers: this.headers(),
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      if (res.status === 404) {
+        return { status: 'not_found', message: `404 ${path}` };
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { status: 'error', message: `${res.status} ${text}` };
+      }
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('application/json')) {
+        return { status: 'ok', data: (await res.json()) as T };
+      }
+      return { status: 'ok', data: undefined as T };
+    } catch (err) {
+      return {
+        status: 'unreachable',
+        message: err instanceof Error ? err.message : 'network error',
+      };
     }
   }
 
+  async listSlots(): Promise<GatewaySlot[]> {
+    const result = await this.listSlotsResult();
+    return result.status === 'ok' ? result.data! : [];
+  }
+
   async getSlotHistory(slotId: string, limit = 50): Promise<GatewayMessage[]> {
-    try {
-      const data = await this.request<{ messages?: GatewayMessage[]; history?: GatewayMessage[] }>(
-        'GET',
-        `/api/slots/${encodeURIComponent(slotId)}/history?limit=${limit}`,
-      );
-      return data.messages ?? data.history ?? [];
-    } catch {
-      return [];
-    }
+    const result = await this.getSlotHistoryResult(slotId, limit);
+    return result.status === 'ok' ? result.data! : [];
   }
 
   async sendMessage(slotId: string, message: string): Promise<void> {
@@ -149,11 +192,8 @@ export class GatewayClient {
   }
 
   async getTaskRun(taskId: string): Promise<TaskRunRecord | null> {
-    try {
-      return await this.request<TaskRunRecord>('GET', `/api/taskrunner/${encodeURIComponent(taskId)}`);
-    } catch {
-      return null;
-    }
+    const result = await this.getTaskRunResult(taskId);
+    return result.status === 'ok' ? (result.data ?? null) : null;
   }
 
   async listTaskRuns(): Promise<TaskRunRecord[]> {
