@@ -52,6 +52,8 @@ kirocrew cron add "your prompt here" --every 86400
 
 See [docs/architecture.md](docs/architecture.md) and [docs/gateway-integration.md](docs/gateway-integration.md).
 
+Coding agents: see [AGENTS.md](AGENTS.md) for build commands, review gate (PASS/DENY), and PR rules.
+
 ## Licence
 
 Apache 2.0

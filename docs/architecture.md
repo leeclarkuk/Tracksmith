@@ -79,6 +79,12 @@ Optional bounded loop for Task Runner:
 
 Uses Host Task Runner built-in reviewer; no in-product reviewer agent in v1.
 
+## Dev-process review (see AGENTS.md)
+
+Independent review uses an explicit **PASS** or **DENY** verdict. See [AGENTS.md](../AGENTS.md) for the mandatory gate, prompt template, and agent workflow. Findings alone are not sufficient; the reviewer must end with `VERDICT: PASS` or `VERDICT: DENY`.
+
+Architecture changes should update this document before implementation. Code changes that touch gateway, engine, reconcile, or column logic require **VERDICT: PASS** before PR.
+
 ## Failure modes
 
 | Failure | Behaviour |
