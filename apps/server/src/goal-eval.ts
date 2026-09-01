@@ -87,6 +87,9 @@ export function evaluateGoalContractLimits(
     : 0;
 
   if (verificationPassed) {
+    settled.column = 'done';
+    settled.failureReason = undefined;
+    settled.settledAt = settled.settledAt ?? new Date().toISOString();
     return settled;
   }
 

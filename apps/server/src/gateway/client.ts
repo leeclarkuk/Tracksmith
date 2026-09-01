@@ -80,9 +80,10 @@ export class GatewayClient {
   async getStatus(): Promise<GatewayStatus> {
     try {
       const data = await this.request<Record<string, unknown>>('GET', '/api/status');
+      const features = data.features as Record<string, unknown> | undefined;
       return {
         ok: true,
-        taskRunnerEnabled: data.taskrunner !== false && (data.features as Record<string, unknown> | undefined)?.taskrunner !== false,
+        taskRunnerEnabled: data.taskrunner === true || features?.taskrunner === true,
         version: typeof data.version === 'string' ? data.version : undefined,
       };
     } catch {
@@ -186,7 +187,8 @@ export class GatewayClient {
   }
 
   async startTaskRunner(spec: string): Promise<TaskRunRecord> {
-    const data = await this.request<TaskRunRecord>('POST', '/api/taskrunner', { spec });
+    const inlineSpec = spec.startsWith('__inline__:') ? spec : `__inline__:${spec}`;
+    const data = await this.request<TaskRunRecord>('POST', '/api/taskrunner', { spec: inlineSpec });
     if (!data.task_id) throw new Error('Gateway did not return task_id');
     return data;
   }
@@ -206,6 +208,11 @@ export class GatewayClient {
   }
 
   async taskToChat(taskId: string): Promise<{ slotId?: string }> {
-    return this.request('POST', `/api/taskrunner/${encodeURIComponent(taskId)}/to-chat`, {});
+    const data = await this.request<{ slotId?: string; slot_id?: string; id?: string }>(
+      'POST',
+      `/api/taskrunner/${encodeURIComponent(taskId)}/to-chat`,
+      {},
+    );
+    return { slotId: data.slotId ?? data.slot_id ?? data.id };
   }
 }

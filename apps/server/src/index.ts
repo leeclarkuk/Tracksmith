@@ -8,6 +8,7 @@ import { EngineRouter } from './engine/router.js';
 import { GatewayClient } from './gateway/client.js';
 import { GatewayListener } from './gateway/listener.js';
 import { reconcileRunningCards } from './reconcile.js';
+import { shouldAutoRetryGoal } from './goal-eval.js';
 import { Projector } from './gateway/projector.js';
 import { PendingRunRegistry } from './pending-runs.js';
 import { registerAuth, registerRoutes } from './routes.js';
@@ -63,9 +64,18 @@ const listener = new GatewayListener(gateway, store, pending, broadcast, router)
 async function runReconcile(startup = false): Promise<void> {
   const reconciled = await reconcileRunningCards(store, gateway, projector, {
     settleChatFromHistory: startup,
+    router,
   });
   if (reconciled > 0) {
     console.log(`[reconcile] updated ${reconciled} running card(s)`);
+    broadcast();
+  }
+  if (startup) {
+    for (const card of store.list()) {
+      if (shouldAutoRetryGoal(card)) {
+        await router.run(card);
+      }
+    }
     broadcast();
   }
 }

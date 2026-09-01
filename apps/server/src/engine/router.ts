@@ -10,7 +10,7 @@ import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
 import { Projector } from '../gateway/projector.js';
-import { settleWithGoalContract } from '../goal-eval.js';
+import { settleWithGoalContract, shouldAutoRetryGoal } from '../goal-eval.js';
 
 export class EngineRouter {
   constructor(
@@ -117,6 +117,11 @@ export class EngineRouter {
         return new Projector(this.gateway).settleTask(card, run);
       });
       return settled ?? updated;
+    }).then(async (result) => {
+      if (result && shouldAutoRetryGoal(result)) {
+        return this.run(result);
+      }
+      return result;
     }) as Promise<OutcomeCard>;
   }
 
@@ -152,7 +157,13 @@ export class EngineRouter {
 
       if (current.runRef?.kind === 'task_runner' && current.runRef.taskId) {
         try {
-          await this.gateway.taskToChat(current.runRef.taskId);
+          const chat = await this.gateway.taskToChat(current.runRef.taskId);
+          if (chat.slotId) {
+            current.runRef = { kind: 'chat', slotId: chat.slotId, sessionKey: chat.slotId };
+            current.column = 'running';
+            await this.gateway.sendMessage(chat.slotId, instruction);
+            return current;
+          }
           current.resultPacket = {
             finalSummary: 'Follow-up chat opened in Host',
             checks: [],

@@ -111,7 +111,7 @@ export class GatewayListener {
 
   private async handleEvent(event: GatewayEvent): Promise<void> {
     const type = event.type ?? event.event ?? '';
-    const slotId = event.slot_id ?? event.slotId;
+    const slotId = event.slot_id ?? event.slotId ?? (event.slot as string | undefined);
     const taskId = event.task_id ?? event.taskId;
 
     if (type === 'tool_call') {
@@ -199,7 +199,7 @@ export class GatewayListener {
           }
         }
         const runResult = await this.gateway.getTaskRunResult(taskId);
-        if (runResult.status === 'unreachable' || runResult.status === 'error') {
+        if (runResult.status === 'unreachable' || runResult.status === 'error' || runResult.status === 'not_found') {
           card.audit.push({
             id: crypto.randomUUID(),
             at: new Date().toISOString(),
@@ -209,6 +209,15 @@ export class GatewayListener {
           return card;
         }
         const run = runResult.status === 'ok' ? (runResult.data ?? null) : null;
+        if (!run) {
+          card.audit.push({
+            id: crypto.randomUUID(),
+            at: new Date().toISOString(),
+            kind: 'recovery',
+            message: 'Task settlement deferred: empty run record',
+          });
+          return card;
+        }
         let settled: OutcomeCard | null | undefined;
         if (card.goalContract?.continueUntilVerified) {
           settled = await settleWithGoalContract(card, run, this.projector);

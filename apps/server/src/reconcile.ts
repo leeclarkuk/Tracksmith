@@ -2,7 +2,8 @@ import type { OutcomeCard } from '@tracksmith/shared';
 import type { CardStore } from './db/store.js';
 import type { GatewayClient } from './gateway/client.js';
 import { Projector } from './gateway/projector.js';
-import { settleWithGoalContract } from './goal-eval.js';
+import { settleWithGoalContract, shouldAutoRetryGoal } from './goal-eval.js';
+import type { EngineRouter } from './engine/router.js';
 import { isGoalContractElapsed } from './goal-contract.js';
 
 function audit(card: OutcomeCard, message: string): void {
@@ -26,7 +27,7 @@ export async function reconcileRunningCards(
   store: CardStore,
   gateway: GatewayClient,
   projector: Projector,
-  options: { settleChatFromHistory?: boolean } = {},
+  options: { settleChatFromHistory?: boolean; router?: EngineRouter } = {},
 ): Promise<number> {
   const gatewayStatus = await gateway.getStatus();
   if (!gatewayStatus.ok) {
@@ -66,7 +67,12 @@ export async function reconcileRunningCards(
       return null;
     });
 
-    if (updated) count++;
+    if (updated) {
+      count++;
+      if (options.router && shouldAutoRetryGoal(updated)) {
+        await options.router.run(updated);
+      }
+    }
   }
 
   return count;
