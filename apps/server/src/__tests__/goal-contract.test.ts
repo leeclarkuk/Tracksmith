@@ -11,8 +11,11 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(true);
   });
 
-  it('fails negated criteria when prohibited content is present', () => {
-    const checks = evaluateAcceptanceCriteria(['no errors'], 'Build failed with error in deploy step');
+  it('fails negated error criteria when errors appear later in output', () => {
+    const checks = evaluateAcceptanceCriteria(
+      ['no errors'],
+      'No errors in step 1 but deploy failed with an error',
+    );
     expect(checks[0]?.passed).toBe(false);
   });
 

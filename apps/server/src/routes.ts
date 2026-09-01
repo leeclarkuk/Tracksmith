@@ -52,7 +52,7 @@ export function registerRoutes(
   });
 
   app.post('/api/cards', async (req, reply) => {
-    const body = req.body as {
+    const body = (req.body ?? {}) as {
       prompt?: string;
       engine?: string;
       column?: 'backlog' | 'todo';

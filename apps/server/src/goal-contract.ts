@@ -6,11 +6,23 @@ export function normalizeGoalContract(input?: Partial<GoalContract>): GoalContra
   if (!criteria.length) {
     throw new Error('Goal contract requires at least one acceptance criterion');
   }
+  const maxAttempts = input.maxAttempts === undefined ? 3 : Number(input.maxAttempts);
+  const maxWallClockSeconds = input.maxWallClockSeconds === undefined ? 3600 : Number(input.maxWallClockSeconds);
+  const maxTokenBudget = input.maxTokenBudget === undefined ? 500000 : Number(input.maxTokenBudget);
+  if (!Number.isFinite(maxAttempts) || maxAttempts < 1) {
+    throw new Error('Goal contract maxAttempts must be a finite number >= 1');
+  }
+  if (!Number.isFinite(maxWallClockSeconds) || maxWallClockSeconds < 60) {
+    throw new Error('Goal contract maxWallClockSeconds must be a finite number >= 60');
+  }
+  if (!Number.isFinite(maxTokenBudget) || maxTokenBudget < 1000) {
+    throw new Error('Goal contract maxTokenBudget must be a finite number >= 1000');
+  }
   return {
     acceptanceCriteria: criteria,
-    maxAttempts: Math.max(1, Number(input.maxAttempts) || 3),
-    maxWallClockSeconds: Math.max(60, Number(input.maxWallClockSeconds) || 3600),
-    maxTokenBudget: Math.max(1000, Number(input.maxTokenBudget) || 500000),
+    maxAttempts: Math.floor(maxAttempts),
+    maxWallClockSeconds: Math.floor(maxWallClockSeconds),
+    maxTokenBudget: Math.floor(maxTokenBudget),
     continueUntilVerified: true,
     attemptCount: 0,
     tokenUsed: 0,
@@ -46,24 +58,21 @@ export function evaluateAcceptanceCriteria(
     let matched: boolean;
     if (negated) {
       let prohibited = false;
-      if (lower.includes(lowerNeedle)) {
-        matched = true;
-      } else if (failureCriterion || /\berror/i.test(subjectLower)) {
+      if (failureCriterion || /\berror/i.test(subjectLower)) {
         prohibited = matchWithoutLeadingNegation(lower, /\b(error|fail(ed|s|ure)?)\b/i);
-        matched = !prohibited;
       } else if (passCriterion) {
         prohibited = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
-        matched = !prohibited;
       } else if (subjectTokens.length > 0) {
         prohibited = subjectTokens.some((t) =>
           matchWithoutLeadingNegation(lower, new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')),
         );
-        matched = !prohibited;
       } else if (subjectLower.length > 0) {
-        matched = !matchWithoutLeadingNegation(lower, new RegExp(subjectLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-      } else {
-        matched = true;
+        prohibited = matchWithoutLeadingNegation(
+          lower,
+          new RegExp(subjectLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+        );
       }
+      matched = !prohibited;
     } else {
       const tokens = lowerNeedle.split(/\s+/).filter((t) => t.length > 3);
       const tokenHits =
