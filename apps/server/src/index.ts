@@ -82,6 +82,10 @@ async function runReconcile(startup = false): Promise<void> {
 
 listener.setReconcile(() => runReconcile(false));
 
+const reconcileInterval = setInterval(() => {
+  void runReconcile(false);
+}, 30_000);
+
 async function start(): Promise<void> {
   await runReconcile(true);
   listener.start();
@@ -95,6 +99,7 @@ start().catch((err) => {
 });
 
 process.on('SIGTERM', () => {
+  clearInterval(reconcileInterval);
   listener.stop();
   process.exit(0);
 });

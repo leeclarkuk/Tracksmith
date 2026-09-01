@@ -53,7 +53,12 @@ export async function settleWithGoalContract(
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
   const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
   const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
-  return evaluateGoalContractLimits(settled, passed);
+  return evaluateGoalContractLimits(settled, passed, isHostRunSuccessful(run));
+}
+
+function isHostRunSuccessful(run: TaskRunRecord | null): boolean {
+  if (!run) return true;
+  return run.status === 'completed' || run.status === 'done';
 }
 
 export async function settleChatWithGoalContract(
@@ -73,12 +78,13 @@ export async function settleChatWithGoalContract(
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
   const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
   const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
-  return evaluateGoalContractLimits(settled, passed);
+  return evaluateGoalContractLimits(settled, passed, true);
 }
 
 export function evaluateGoalContractLimits(
   settled: OutcomeCard,
   verificationPassed: boolean,
+  hostRunSucceeded: boolean,
 ): OutcomeCard {
   const contract = settled.goalContract!;
   const tokens = contract.tokenUsed;
@@ -86,7 +92,9 @@ export function evaluateGoalContractLimits(
     ? (Date.now() - new Date(contract.startedAt).getTime()) / 1000
     : 0;
 
-  if (verificationPassed) {
+  const criteriaMet = verificationPassed && hostRunSucceeded;
+
+  if (criteriaMet) {
     settled.column = 'done';
     settled.failureReason = undefined;
     settled.settledAt = settled.settledAt ?? new Date().toISOString();

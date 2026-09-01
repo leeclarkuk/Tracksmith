@@ -58,7 +58,7 @@ export function registerRoutes(
       column?: 'backlog' | 'todo';
       goalContract?: { continueUntilVerified?: boolean; acceptanceCriteria?: string[] };
     };
-    if (!body.prompt?.trim()) return badRequest(reply, 'prompt is required');
+    if (typeof body.prompt !== 'string' || !body.prompt.trim()) return badRequest(reply, 'prompt is required');
     const engineRaw = body.engine ?? 'auto';
     if (!ALLOWED_ENGINES.includes(engineRaw as Engine)) {
       return badRequest(reply, `Invalid engine: ${engineRaw}`);
@@ -79,19 +79,19 @@ export function registerRoutes(
       }
     }
 
+    let goalContract;
+    try {
+      goalContract = normalizeGoalContract(body.goalContract as never);
+    } catch (err) {
+      return badRequest(reply, err instanceof Error ? err.message : 'Invalid goal contract');
+    }
+
     let title: string | undefined;
     let summary: string | undefined;
     const derived = await gateway.deriveTitleSummary(body.prompt.trim());
     if (derived) {
       title = derived.title;
       summary = derived.summary;
-    }
-
-    let goalContract;
-    try {
-      goalContract = normalizeGoalContract(body.goalContract as never);
-    } catch (err) {
-      return badRequest(reply, err instanceof Error ? err.message : 'Invalid goal contract');
     }
 
     const card = store.create(
@@ -110,8 +110,9 @@ export function registerRoutes(
 
   app.patch('/api/cards/:id/column', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { column } = req.body as { column?: string };
-    if (!column) return badRequest(reply, 'column is required');
+    const body = (req.body ?? {}) as { column?: string };
+    const { column } = body;
+    if (typeof column !== 'string' || !column) return badRequest(reply, 'column is required');
     try {
       const updated = await store.mutate(id, (card) => {
         if (!canTransitionColumn(card.column, column as never)) {

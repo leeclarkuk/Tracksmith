@@ -82,7 +82,7 @@ export class Projector {
   async settleChat(card: OutcomeCard, failed: boolean, error?: string): Promise<OutcomeCard | null> {
     if (!failed && card.runRef?.slotId) {
       const historyResult = await this.gateway.getSlotHistoryResult(card.runRef.slotId);
-      if (historyResult.status === 'unreachable' || historyResult.status === 'error') {
+      if (historyResult.status === 'unreachable' || historyResult.status === 'error' || historyResult.status === 'not_found') {
         card.audit.push({
           id: nanoid(),
           at: new Date().toISOString(),
@@ -92,6 +92,15 @@ export class Projector {
         return card;
       }
       const history = historyResult.status === 'ok' ? historyResult.data! : [];
+      if (!history.some((m) => m.role === 'assistant')) {
+        card.audit.push({
+          id: nanoid(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: 'Settlement deferred: no assistant response in slot history',
+        });
+        return card;
+      }
       card.resultPacket = buildResultFromChatHistory(history, failed, error);
     } else {
       card.resultPacket = buildResultFromChatHistory([], failed, error);
