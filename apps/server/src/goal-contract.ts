@@ -9,14 +9,14 @@ export function normalizeGoalContract(input?: Partial<GoalContract>): GoalContra
   const maxAttempts = input.maxAttempts === undefined ? 3 : Number(input.maxAttempts);
   const maxWallClockSeconds = input.maxWallClockSeconds === undefined ? 3600 : Number(input.maxWallClockSeconds);
   const maxTokenBudget = input.maxTokenBudget === undefined ? 500000 : Number(input.maxTokenBudget);
-  if (!Number.isFinite(maxAttempts) || maxAttempts < 1) {
-    throw new Error('Goal contract maxAttempts must be a finite number >= 1');
+  if (!Number.isFinite(maxAttempts) || maxAttempts < 1 || maxAttempts > 100) {
+    throw new Error('Goal contract maxAttempts must be a finite number between 1 and 100');
   }
-  if (!Number.isFinite(maxWallClockSeconds) || maxWallClockSeconds < 60) {
-    throw new Error('Goal contract maxWallClockSeconds must be a finite number >= 60');
+  if (!Number.isFinite(maxWallClockSeconds) || maxWallClockSeconds < 60 || maxWallClockSeconds > 86_400) {
+    throw new Error('Goal contract maxWallClockSeconds must be a finite number between 60 and 86400');
   }
-  if (!Number.isFinite(maxTokenBudget) || maxTokenBudget < 1000) {
-    throw new Error('Goal contract maxTokenBudget must be a finite number >= 1000');
+  if (!Number.isFinite(maxTokenBudget) || maxTokenBudget < 1000 || maxTokenBudget > 10_000_000) {
+    throw new Error('Goal contract maxTokenBudget must be a finite number between 1000 and 10000000');
   }
   return {
     acceptanceCriteria: criteria,
@@ -35,6 +35,55 @@ function matchWithoutLeadingNegation(text: string, pattern: RegExp): boolean {
     const before = text.slice(Math.max(0, index - 24), index);
     if (/\b(not|no|without|never|didn't|did not|failed to)\s*$/i.test(before)) continue;
     return true;
+  }
+  return false;
+}
+
+const NEGATED_SUBJECT_STOPWORDS = new Set([
+  'tests',
+  'test',
+  'existing',
+  'public',
+  'during',
+  'migration',
+  'step',
+  'task',
+  'unit',
+  'integration',
+  'changes',
+  'change',
+  'updated',
+  'added',
+]);
+
+const VIOLATION_SIGNALS =
+  /\b(fail(ed|s|ure)?|error|errors|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tokenPattern(token: string): RegExp {
+  if (token.endsWith('s') && token.length > 4) {
+    const stem = token.slice(0, -1);
+    return new RegExp(`\\b${escapeRegex(stem)}(s|ed|ing)?\\b`, 'gi');
+  }
+  return new RegExp(`\\b${escapeRegex(token)}\\b`, 'gi');
+}
+
+function hasSubjectViolation(text: string, subjectTokens: string[]): boolean {
+  const meaningful = subjectTokens.filter((t) => t.length > 3 && !NEGATED_SUBJECT_STOPWORDS.has(t));
+  if (!meaningful.length) return false;
+
+  for (const token of meaningful) {
+    const re = tokenPattern(token);
+    for (const match of text.matchAll(re)) {
+      const index = match.index ?? 0;
+      const before = text.slice(Math.max(0, index - 24), index);
+      if (/\b(not|no|without|never|didn't|did not|failed to)\s*$/i.test(before)) continue;
+      const window = text.slice(Math.max(0, index - 16), Math.min(text.length, index + token.length + 48));
+      if (VIOLATION_SIGNALS.test(window)) return true;
+    }
   }
   return false;
 }
@@ -63,9 +112,7 @@ export function evaluateAcceptanceCriteria(
       } else if (passCriterion) {
         prohibited = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
       } else if (subjectTokens.length > 0) {
-        prohibited = subjectTokens.some((t) =>
-          matchWithoutLeadingNegation(lower, new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')),
-        );
+        prohibited = hasSubjectViolation(lower, subjectTokens);
       } else if (subjectLower.length > 0) {
         prohibited = matchWithoutLeadingNegation(
           lower,

@@ -25,7 +25,7 @@ export function CardView({ card, overlay, onOpen, onRun, onHost }: Props) {
         </div>
       )}
       <div className="card-actions">
-        {card.column === 'todo' && onRun && (
+        {(card.column === 'todo' || card.column === 'backlog') && onRun && (
           <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); onRun(); }}>
             Run
           </button>

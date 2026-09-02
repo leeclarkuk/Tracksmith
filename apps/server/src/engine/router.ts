@@ -10,7 +10,7 @@ import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
 import { Projector } from '../gateway/projector.js';
-import { settleWithGoalContract, shouldAutoRetryGoal } from '../goal-eval.js';
+import { settleWithGoalContract, tryRunGoalRetry } from '../goal-eval.js';
 
 export class EngineRouter {
   constructor(
@@ -118,10 +118,8 @@ export class EngineRouter {
       });
       return settled ?? updated;
     }).then(async (result) => {
-      if (result && shouldAutoRetryGoal(result)) {
-        return this.run(result);
-      }
-      return result;
+      if (!result) return result;
+      return (await tryRunGoalRetry(this, result)) ?? result;
     }) as Promise<OutcomeCard>;
   }
 

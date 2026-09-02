@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import { Projector } from '../gateway/projector.js';
-import { settleChatWithGoalContract, settleWithGoalContract, shouldAutoRetryGoal } from '../goal-eval.js';
+import { settleChatWithGoalContract, settleWithGoalContract, tryRunGoalRetry } from '../goal-eval.js';
 import type { EngineRouter } from '../engine/router.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
 
@@ -98,9 +98,9 @@ export class GatewayListener {
   }
 
   private async maybeAutoRetryGoal(card: OutcomeCard): Promise<void> {
-    if (!this.router || !shouldAutoRetryGoal(card)) return;
-    await this.router.run(card);
-    this.onUpdate();
+    if (!this.router) return;
+    const retried = await tryRunGoalRetry(this.router, card);
+    if (retried) this.onUpdate();
   }
 
   private clearPendingForCard(card: OutcomeCard): void {
@@ -140,7 +140,11 @@ export class GatewayListener {
         if (settled) this.clearPendingForCard(settled);
         return settled;
       }).then((updated) => {
-        if (updated) void this.maybeAutoRetryGoal(updated);
+        if (updated) {
+          void this.maybeAutoRetryGoal(updated).catch((err) => {
+            console.warn('[goal-retry] chat_done:', err instanceof Error ? err.message : err);
+          });
+        }
       });
       this.onUpdate();
       return;
@@ -190,7 +194,7 @@ export class GatewayListener {
         return;
       }
       await this.store.mutate(cardId, async (card) => {
-        if (card.column !== 'running') return null;
+        if (card.column !== 'running' || card.runRef?.taskId !== taskId) return null;
         const runResult = await this.gateway.getTaskRunResult(taskId);
         if (runResult.status === 'unreachable' || runResult.status === 'error' || runResult.status === 'not_found') {
           card.audit.push({
@@ -220,7 +224,11 @@ export class GatewayListener {
         if (settled) this.clearPendingForCard(settled);
         return settled;
       }).then((updated) => {
-        if (updated) void this.maybeAutoRetryGoal(updated);
+        if (updated) {
+          void this.maybeAutoRetryGoal(updated).catch((err) => {
+            console.warn('[goal-retry] task_complete:', err instanceof Error ? err.message : err);
+          });
+        }
       });
       this.onUpdate();
     }

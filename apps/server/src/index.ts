@@ -8,7 +8,7 @@ import { EngineRouter } from './engine/router.js';
 import { GatewayClient } from './gateway/client.js';
 import { GatewayListener } from './gateway/listener.js';
 import { reconcileRunningCards } from './reconcile.js';
-import { shouldAutoRetryGoal } from './goal-eval.js';
+import { tryRunGoalRetry } from './goal-eval.js';
 import { Projector } from './gateway/projector.js';
 import { PendingRunRegistry } from './pending-runs.js';
 import { registerAuth, registerRoutes } from './routes.js';
@@ -73,22 +73,31 @@ async function runReconcile(startup = false): Promise<void> {
   }
   if (startup) {
     for (const card of store.list()) {
-      if (shouldAutoRetryGoal(card)) {
-        await router.run(card);
-      }
+      await tryRunGoalRetry(router, card);
     }
     broadcast();
   }
 }
 
-listener.setReconcile(() => runReconcile(false));
+async function runReconcileSafe(startup = false): Promise<void> {
+  try {
+    await runReconcile(startup);
+  } catch (err) {
+    console.error('[reconcile] failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+listener.setReconcile(() => runReconcileSafe(false));
 
 const reconcileInterval = setInterval(() => {
-  void runReconcile(false);
+  void runReconcileSafe(false);
 }, 30_000);
 
 async function start(): Promise<void> {
-  await runReconcile(true);
+  if (config.host !== '127.0.0.1' && config.host !== 'localhost' && !config.apiToken) {
+    console.warn('[auth] HOST is not loopback and TRACKSMITH_API_TOKEN is unset; API is exposed without auth');
+  }
+  await runReconcileSafe(true);
   listener.start();
   await app.listen({ port: config.port, host: config.host });
   console.log(`Tracksmith listening on http://${config.host}:${config.port}`);
@@ -97,6 +106,10 @@ async function start(): Promise<void> {
 start().catch((err) => {
   console.error(err);
   process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
 });
 
 process.on('SIGTERM', () => {

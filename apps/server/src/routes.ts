@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { canTransitionColumn, resolveEngine, type Engine } from '@tracksmith/shared';
+import { canTransitionColumn, deriveTitleSummary, resolveEngine, type Engine } from '@tracksmith/shared';
 import type { ServerConfig } from './config.js';
 import type { CardStore } from './db/store.js';
 import type { EngineRouter } from './engine/router.js';
@@ -86,14 +86,7 @@ export function registerRoutes(
       return badRequest(reply, err instanceof Error ? err.message : 'Invalid goal contract');
     }
 
-    let title: string | undefined;
-    let summary: string | undefined;
-    const derived = await gateway.deriveTitleSummary(body.prompt.trim());
-    if (derived) {
-      title = derived.title;
-      summary = derived.summary;
-    }
-
+    const derived = deriveTitleSummary(body.prompt.trim());
     const card = store.create(
       {
         prompt: body.prompt.trim(),
@@ -101,8 +94,8 @@ export function registerRoutes(
         column,
         goalContract,
       },
-      title,
-      summary,
+      derived.title,
+      derived.summary,
     );
     broadcast();
     return card;
@@ -133,9 +126,13 @@ export function registerRoutes(
     const { id } = req.params as { id: string };
     const card = store.get(id);
     if (!card) return notFound(reply, 'Card not found');
-    const updated = await router.run(card);
-    broadcast();
-    return updated;
+    try {
+      const updated = await router.run(card);
+      broadcast();
+      return updated;
+    } catch (err) {
+      return badRequest(reply, err instanceof Error ? err.message : 'Run failed');
+    }
   });
 
   app.post('/api/cards/:id/correct', async (req, reply) => {

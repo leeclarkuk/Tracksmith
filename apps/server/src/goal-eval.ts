@@ -8,6 +8,10 @@ import {
   mergeAcceptanceChecks,
 } from './goal-contract.js';
 
+export interface GoalRunExecutor {
+  run(card: OutcomeCard): Promise<OutcomeCard>;
+}
+
 function buildCorpus(card: OutcomeCard, run: TaskRunRecord | null, extra = ''): string {
   const attemptStart = card.goalContract?.attemptStartedAt ?? card.goalContract?.startedAt;
   const attemptStartedAt = attemptStart ? new Date(attemptStart).getTime() : undefined;
@@ -134,4 +138,18 @@ export function shouldAutoRetryGoal(card: OutcomeCard): boolean {
   if (card.column !== 'todo' || !card.goalContract?.continueUntilVerified) return false;
   const last = card.audit[card.audit.length - 1];
   return last?.kind === 'goal_retry';
+}
+
+export async function tryRunGoalRetry(
+  router: GoalRunExecutor,
+  card: OutcomeCard,
+): Promise<OutcomeCard | null> {
+  if (!shouldAutoRetryGoal(card)) return null;
+  if (card.column !== 'todo' && card.column !== 'backlog') return null;
+  try {
+    return await router.run(card);
+  } catch (err) {
+    console.warn('[goal-retry] skipped:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }

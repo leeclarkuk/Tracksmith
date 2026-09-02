@@ -4,7 +4,8 @@ export class PendingRunRegistry {
   private byCard = new Map<string, PendingKind>();
   private slotToCard = new Map<string, string>();
   private taskToCard = new Map<string, string>();
-  private completedTasks = new Set<string>();
+  private completedTasks = new Map<string, number>();
+  private static MAX_COMPLETED_TASKS = 200;
 
   start(cardId: string, kind: PendingKind): void {
     this.clearForCard(cardId);
@@ -22,8 +23,18 @@ export class PendingRunRegistry {
   }
 
   noteTaskComplete(taskId: string): void {
-    if (!this.taskToCard.has(taskId)) {
-      this.completedTasks.add(taskId);
+    if (this.taskToCard.has(taskId)) return;
+    this.completedTasks.set(taskId, Date.now());
+    if (this.completedTasks.size > PendingRunRegistry.MAX_COMPLETED_TASKS) {
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const [id, at] of this.completedTasks.entries()) {
+        if (at < cutoff) this.completedTasks.delete(id);
+      }
+      while (this.completedTasks.size > PendingRunRegistry.MAX_COMPLETED_TASKS) {
+        const oldest = [...this.completedTasks.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
+        if (!oldest) break;
+        this.completedTasks.delete(oldest);
+      }
     }
   }
 

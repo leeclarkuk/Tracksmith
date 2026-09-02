@@ -29,6 +29,22 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(true);
   });
 
+  it('passes multi-token negated criteria on successful task output', () => {
+    const corpus =
+      'Step 1 PASSED unit tests / Step 2 PASSED integration tests / Task completed: 2/2 steps passed';
+    expect(evaluateAcceptanceCriteria(['No regressions in existing tests'], corpus)[0]?.passed).toBe(true);
+    expect(evaluateAcceptanceCriteria(['no data loss during migration'], 'Step 1 PASSED migration ran, 0 rows lost')[0]?.passed).toBe(true);
+    expect(evaluateAcceptanceCriteria(['no breaking changes to the public API'], 'Step 1 PASSED updated public API docs; changes are additive')[0]?.passed).toBe(true);
+  });
+
+  it('fails multi-token negated criteria when violations are present', () => {
+    const checks = evaluateAcceptanceCriteria(
+      ['No regressions in existing tests'],
+      'Step 1 FAILED regression detected in checkout flow',
+    );
+    expect(checks[0]?.passed).toBe(false);
+  });
+
   it('fails when criterion missing', () => {
     const checks = evaluateAcceptanceCriteria(['database migrated'], 'Updated README only');
     expect(checks[0]?.passed).toBe(false);

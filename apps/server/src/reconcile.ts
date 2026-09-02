@@ -2,7 +2,7 @@ import type { OutcomeCard } from '@tracksmith/shared';
 import type { CardStore } from './db/store.js';
 import type { GatewayClient } from './gateway/client.js';
 import { Projector } from './gateway/projector.js';
-import { settleWithGoalContract, shouldAutoRetryGoal } from './goal-eval.js';
+import { settleWithGoalContract, settleChatWithGoalContract, tryRunGoalRetry } from './goal-eval.js';
 import type { PendingRunRegistry } from './pending-runs.js';
 import type { EngineRouter } from './engine/router.js';
 import { isGoalContractElapsed } from './goal-contract.js';
@@ -17,7 +17,8 @@ function audit(card: OutcomeCard, message: string): void {
 }
 
 function hasDeferredSettlement(card: OutcomeCard): boolean {
-  return card.audit.some(
+  const recent = card.audit.slice(-12);
+  return recent.some(
     (a) =>
       a.message?.includes('Settlement deferred') ||
       a.message?.includes('Task settlement deferred'),
@@ -70,8 +71,8 @@ export async function reconcileRunningCards(
 
     if (updated) {
       count++;
-      if (options.router && shouldAutoRetryGoal(updated)) {
-        await options.router.run(updated);
+      if (options.router) {
+        await tryRunGoalRetry(options.router, updated);
       }
     }
   }
@@ -109,8 +110,9 @@ async function reconcileChatCard(
     return null;
   }
   if (historyResult.status === 'ok') {
+    const shouldSettle = settleFromHistory || hasDeferredSettlement(card);
     const last = historyResult.data![historyResult.data!.length - 1];
-    if (last?.role === 'assistant') {
+    if (shouldSettle && last?.role === 'assistant') {
       audit(
         card,
         hasDeferredSettlement(card)
@@ -119,6 +121,9 @@ async function reconcileChatCard(
             ? 'Settling chat from slot history on startup'
             : 'Settling missed chat completion from slot history on reconnect',
       );
+      if (card.goalContract?.continueUntilVerified) {
+        return settleChatWithGoalContract(card, projector, false);
+      }
       return projector.settleChat(card, false);
     }
   }
