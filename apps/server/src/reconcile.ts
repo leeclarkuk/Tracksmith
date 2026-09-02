@@ -87,12 +87,10 @@ async function reconcileChatCard(
   const slotId = card.runRef!.slotId!;
   const slotsResult = await gateway.listSlotsResult();
   if (slotsResult.status === 'unreachable') {
-    audit(card, 'Reconcile skipped: gateway unreachable');
-    return card;
+    return null;
   }
   if (slotsResult.status !== 'ok') {
-    audit(card, `Reconcile skipped: ${slotsResult.message ?? slotsResult.status}`);
-    return card;
+    return null;
   }
 
   const slot = slotsResult.data!.find((s) => s.id === slotId);
@@ -105,8 +103,7 @@ async function reconcileChatCard(
 
   const historyResult = await gateway.getSlotHistoryResult(slotId, 3);
   if (historyResult.status === 'unreachable') {
-    audit(card, 'Reconcile skipped: gateway unreachable reading slot history');
-    return card;
+    return null;
   }
   if (historyResult.status === 'ok') {
     const last = historyResult.data![historyResult.data!.length - 1];
@@ -134,8 +131,7 @@ async function reconcileTaskCard(
   const runResult = await gateway.getTaskRunResult(taskId);
 
   if (runResult.status === 'unreachable') {
-    audit(card, 'Reconcile skipped: gateway unreachable reading task run');
-    return card;
+    return null;
   }
 
   if (runResult.status === 'not_found') {
@@ -146,8 +142,7 @@ async function reconcileTaskCard(
   }
 
   if (runResult.status !== 'ok' || !runResult.data) {
-    audit(card, `Reconcile skipped: ${runResult.message ?? runResult.status}`);
-    return card;
+    return null;
   }
 
   const run = runResult.data;
