@@ -53,6 +53,19 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(false);
   });
 
+  it('fails all tests pass when failures remain in output', () => {
+    expect(
+      evaluateAcceptanceCriteria(['all tests pass'], 'Suite finished: tests passed, 2 failures remain')[0]?.passed,
+    ).toBe(false);
+    expect(
+      evaluateAcceptanceCriteria(['all tests pass'], 'Suite finished: tests passed, 1 failing spec')[0]?.passed,
+    ).toBe(false);
+  });
+
+  it('fails no errors when errors appear in output', () => {
+    expect(evaluateAcceptanceCriteria(['no errors'], '3 errors found in the console output')[0]?.passed).toBe(false);
+  });
+
   it('fails when criterion missing', () => {
     const checks = evaluateAcceptanceCriteria(['database migrated'], 'Updated README only');
     expect(checks[0]?.passed).toBe(false);

@@ -56,8 +56,16 @@ const NEGATED_SUBJECT_STOPWORDS = new Set([
   'added',
 ]);
 
+const ERROR_WORDS = /\b(errors?)\b/i;
+
 const VIOLATION_SIGNALS =
-  /\b(fail(ed|s|ure|ures|ing)?|failure|failures|error|errors|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
+  /\b(fail(s|ed|ing|ure|ures)?|failure|failures|errors?|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
+
+const FAILURE_OR_ERROR = /\b(errors?|fail(s|ed|ing|ure|ures)?|failure|failures)\b/i;
+
+function matchFailureOrError(text: string): boolean {
+  return matchWithoutLeadingNegation(text, FAILURE_OR_ERROR);
+}
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -101,16 +109,16 @@ export function evaluateAcceptanceCriteria(
     const subject = needle.replace(/\b(no|not|without|never)\b/gi, ' ').replace(/\s+/g, ' ').trim();
     const subjectLower = subject.toLowerCase();
     const subjectTokens = subjectLower.split(/\s+/).filter((t) => t.length > 3);
-    const failureCriterion = /\bfail(ed|s|ure|ures|ing)?\b/i.test(subjectLower);
+    const failureCriterion = FAILURE_OR_ERROR.test(subjectLower);
     const passCriterion = /\bpass(ed|es)?\b/i.test(subjectLower);
 
     let matched: boolean;
     if (negated) {
       let prohibited = false;
-      if (failureCriterion || /\berror/i.test(subjectLower)) {
-        prohibited = matchWithoutLeadingNegation(lower, /\b(error|fail(ed|s|ure|ures|ing)?|failure|failures)\b/i);
+      if (failureCriterion || ERROR_WORDS.test(subjectLower)) {
+        prohibited = matchFailureOrError(lower);
       } else if (passCriterion) {
-        prohibited = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
+        prohibited = matchFailureOrError(lower);
       } else if (subjectTokens.length > 0) {
         prohibited = hasSubjectViolation(lower, subjectTokens);
       } else if (subjectLower.length > 0) {
@@ -130,11 +138,9 @@ export function evaluateAcceptanceCriteria(
       const exactMatch = matchWithoutLeadingNegation(lower, new RegExp(lowerNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
       matched = exactMatch || fuzzyMatch;
       if (failureCriterion) {
-        matched = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
+        matched = matchFailureOrError(lower);
       } else if (passCriterion) {
-        matched =
-          matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) &&
-          !matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
+        matched = matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) && !matchFailureOrError(lower);
       }
     }
 

@@ -26,7 +26,9 @@ function hasDeferredSettlement(card: OutcomeCard): boolean {
 }
 
 function isChatRunStale(card: OutcomeCard): boolean {
-  const attemptStart = card.goalContract?.attemptStartedAt ?? card.audit.find((a) => a.kind === 'run_started')?.at;
+  const attemptStart =
+    card.goalContract?.attemptStartedAt ??
+    [...card.audit].reverse().find((a) => a.kind === 'run_started' || a.kind === 'correction')?.at;
   if (!attemptStart) return false;
   return Date.now() - new Date(attemptStart).getTime() > 5 * 60 * 1000;
 }
@@ -128,9 +130,13 @@ async function reconcileChatCard(
             : 'Settling stale chat run from slot history',
       );
       if (card.goalContract?.continueUntilVerified) {
-        return settleChatWithGoalContract(card, projector, false);
+        const settled = await settleChatWithGoalContract(card, projector, false);
+        if (settled && settled.column !== 'running') pending?.clear(card.id);
+        return settled;
       }
-      return projector.settleChat(card, false);
+      const settled = await projector.settleChat(card, false);
+      if (settled && settled.column !== 'running') pending?.clear(card.id);
+      return settled;
     }
   }
   return null;
