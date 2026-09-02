@@ -235,6 +235,7 @@ export class GatewayClient {
       `/api/taskrunner/${encodeURIComponent(taskId)}/to-chat`,
       {},
     );
+    if (!data) throw new Error('Gateway returned non-JSON body from task-to-chat');
     return { slotId: data.slotId ?? data.slot_id ?? data.id };
   }
 }

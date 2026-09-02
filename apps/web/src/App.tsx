@@ -24,6 +24,7 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
   const [continueUntilVerified, setContinueUntilVerified] = useState(false);
   const [acceptanceCriteria, setAcceptanceCriteria] = useState('');
   const [maxAttempts, setMaxAttempts] = useState(3);
@@ -139,6 +140,11 @@ export default function App() {
             {createError}
           </div>
         )}
+        {runError && (
+          <div className="banner-warn" style={{ marginTop: 8 }}>
+            {runError}
+          </div>
+        )}
       </div>
 
       <div className="goal-fields" style={{ padding: '0 24px 12px', background: 'var(--surface)' }}>
@@ -179,8 +185,13 @@ export default function App() {
               cards={cardsByColumn[col.id]}
               onOpen={(id) => setSelectedId(id)}
               onRun={async (id) => {
-                await api.runCard(id);
-                await refresh();
+                setRunError(null);
+                try {
+                  await api.runCard(id);
+                  await refresh();
+                } catch (err) {
+                  setRunError(err instanceof Error ? err.message : 'Run failed');
+                }
               }}
               onHost={async (id) => {
                 const { url } = await api.hostUrl(id);

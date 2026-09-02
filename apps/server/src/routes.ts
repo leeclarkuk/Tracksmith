@@ -138,7 +138,8 @@ export function registerRoutes(
 
   app.post('/api/cards/:id/correct', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { instruction } = req.body as { instruction?: string };
+    const body = (req.body ?? {}) as { instruction?: string };
+    const instruction = body.instruction;
     if (!instruction?.trim()) return badRequest(reply, 'instruction is required');
     const card = store.get(id);
     if (!card) return notFound(reply, 'Card not found');

@@ -3,8 +3,11 @@ import type { Column, CreateCardInput, OutcomeCard } from '@tracksmith/shared';
 const BASE = '';
 const API_TOKEN = import.meta.env.VITE_TRACKSMITH_API_TOKEN as string | undefined;
 
-function authHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+function authHeaders(body?: BodyInit | null): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (body != null && body !== '') {
+    headers['Content-Type'] = 'application/json';
+  }
   if (API_TOKEN) {
     headers.Authorization = `Bearer ${API_TOKEN}`;
   }
@@ -13,8 +16,8 @@ function authHeaders(): Record<string, string> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { ...authHeaders(), ...init?.headers },
     ...init,
+    headers: { ...authHeaders(init?.body), ...init?.headers },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));

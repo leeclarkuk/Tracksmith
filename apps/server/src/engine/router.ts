@@ -37,6 +37,17 @@ export class EngineRouter {
 
       if (resolved === 'task_runner') {
         const status = await this.gateway.getStatus();
+        if (!status.ok) {
+          current.failureReason =
+            'Host is unreachable. Check GATEWAY_URL and that KiroCrew is running, then retry.';
+          current.audit.push({
+            id: nanoid(),
+            at: new Date().toISOString(),
+            kind: 'run_started',
+            message: 'Run blocked: Host unreachable',
+          });
+          return current;
+        }
         if (!status.taskRunnerEnabled) {
           current.failureReason = 'Task Runner is not enabled on the Host. Enable it in KiroCrew, then retry.';
           current.audit.push({
