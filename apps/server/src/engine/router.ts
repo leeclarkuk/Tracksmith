@@ -111,10 +111,16 @@ export class EngineRouter {
         const runResult = await this.gateway.getTaskRunResult(taskId);
         if (runResult.status !== 'ok' || !runResult.data) return card;
         const run = runResult.data;
+        let next: OutcomeCard;
         if (card.goalContract?.continueUntilVerified) {
-          return settleWithGoalContract(card, run, new Projector(this.gateway));
+          next = (await settleWithGoalContract(card, run, new Projector(this.gateway))) ?? card;
+        } else {
+          next = (await new Projector(this.gateway).settleTask(card, run)) ?? card;
         }
-        return new Projector(this.gateway).settleTask(card, run);
+        if (next.column !== 'running') {
+          this.pending.clear(next.id);
+        }
+        return next;
       });
       return settled ?? updated;
     }).then(async (result) => {
@@ -165,21 +171,32 @@ export class EngineRouter {
             await this.gateway.sendMessage(chat.slotId, instruction);
             return current;
           }
-          current.resultPacket = {
-            finalSummary: 'Follow-up chat opened in Host',
-            checks: [],
-            artifacts: [],
-            risks: [],
-            nextActions: ['Open follow-up chat in Host to continue with your correction'],
-            producedAt: new Date().toISOString(),
-          };
+          const followUp = 'Open follow-up chat in Host to continue with your correction';
+          if (current.resultPacket) {
+            if (!current.resultPacket.nextActions.includes(followUp)) {
+              current.resultPacket.nextActions = [...current.resultPacket.nextActions, followUp];
+            }
+          } else {
+            current.resultPacket = {
+              finalSummary: 'Follow-up chat opened in Host',
+              checks: [],
+              artifacts: [],
+              risks: [],
+              nextActions: [followUp],
+              producedAt: new Date().toISOString(),
+            };
+          }
+          current.audit.push({
+            id: nanoid(),
+            at: new Date().toISOString(),
+            kind: 'correction',
+            message: 'Task-to-chat returned no slot id; preserved existing result packet',
+          });
           return current;
         } catch {
-          current.column = 'todo';
           current.prompt = `${current.prompt}\n\nCorrection: ${instruction}`;
         }
       } else {
-        current.column = 'todo';
         current.prompt = `${current.prompt}\n\nCorrection: ${instruction}`;
       }
 

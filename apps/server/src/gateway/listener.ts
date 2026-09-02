@@ -22,6 +22,8 @@ interface GatewayEvent {
 export class GatewayListener {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private stopped = false;
   private projector: Projector;
   private reconcileFn: (() => Promise<void>) | null = null;
 
@@ -40,13 +42,19 @@ export class GatewayListener {
   }
 
   start(): void {
+    this.stopped = false;
     this.connect();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.ws?.close();
-    this.ws = null;
+    this.reconnectTimer = null;
+    if (this.ws) {
+      this.ws.removeAllListeners('close');
+      this.ws.close();
+      this.ws = null;
+    }
   }
 
   private connect(): void {
@@ -59,6 +67,7 @@ export class GatewayListener {
 
     this.ws.on('open', () => {
       console.log('[gateway-ws] connected');
+      this.reconnectAttempt = 0;
       if (this.reconcileFn) {
         void this.reconcileFn().then(() => this.onUpdate());
       }
@@ -75,7 +84,8 @@ export class GatewayListener {
 
     this.ws.on('close', () => {
       console.log('[gateway-ws] disconnected');
-      this.scheduleReconnect();
+      this.ws = null;
+      if (!this.stopped) this.scheduleReconnect();
     });
 
     this.ws.on('error', () => {
@@ -84,11 +94,13 @@ export class GatewayListener {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.stopped || this.reconnectTimer) return;
+    const delayMs = Math.min(60_000, 5000 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, 5000);
+    }, delayMs);
   }
 
   private resolveCardId(kind: 'chat' | 'task_runner', id: string): string | undefined {
@@ -121,7 +133,10 @@ export class GatewayListener {
           ? this.resolveCardId('task_runner', taskId)
           : undefined;
       if (!cardId) return;
-      await this.store.mutate(cardId, (card) => this.projector.handleToolCall(card, event));
+      await this.store.mutate(cardId, (card) => {
+        if (card.column !== 'running') return null;
+        return this.projector.handleToolCall(card, event);
+      });
       this.onUpdate();
       return;
     }
@@ -168,6 +183,7 @@ export class GatewayListener {
       if (!cardId) return;
       const message = String(event.message ?? event.status ?? type);
       await this.store.mutate(cardId, (card) => {
+        if (card.column !== 'running') return null;
         card.audit.push({
           id: crypto.randomUUID(),
           at: new Date().toISOString(),

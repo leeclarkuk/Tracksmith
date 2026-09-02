@@ -37,6 +37,21 @@ export interface TaskRunRecord {
 export class GatewayClient {
   constructor(private config: ServerConfig) {}
 
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.gatewayRequestTimeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error(`Gateway request timed out after ${this.config.gatewayRequestTimeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.config.gatewayToken) {
@@ -47,7 +62,7 @@ export class GatewayClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.config.gatewayUrl}${path}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method,
       headers: this.headers(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -122,7 +137,10 @@ export class GatewayClient {
   async listSlotsResult(): Promise<GatewayReadResult<GatewaySlot[]>> {
     const result = await this.requestResult<{ slots?: GatewaySlot[] } | GatewaySlot[]>('GET', '/api/slots');
     if (result.status !== 'ok') return result as GatewayReadResult<GatewaySlot[]>;
-    const data = result.data!;
+    const data = result.data;
+    if (data === undefined) {
+      return { status: 'error', message: 'Gateway returned non-JSON body for /api/slots' };
+    }
     return { status: 'ok', data: Array.isArray(data) ? data : (data.slots ?? []) };
   }
 
@@ -132,7 +150,10 @@ export class GatewayClient {
       `/api/slots/${encodeURIComponent(slotId)}/history?limit=${limit}`,
     );
     if (result.status !== 'ok') return result as GatewayReadResult<GatewayMessage[]>;
-    const data = result.data!;
+    const data = result.data;
+    if (data === undefined) {
+      return { status: 'error', message: `Gateway returned non-JSON body for slot history ${slotId}` };
+    }
     return { status: 'ok', data: data.messages ?? data.history ?? [] };
   }
 
@@ -147,7 +168,7 @@ export class GatewayClient {
   ): Promise<GatewayReadResult<T>> {
     try {
       const url = `${this.config.gatewayUrl}${path}`;
-      const res = await fetch(url, {
+      const res = await this.fetchWithTimeout(url, {
         method,
         headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,

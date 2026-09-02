@@ -27,7 +27,23 @@ function broadcast(): void {
   for (const send of sseClients) send(payload);
 }
 
-const app = Fastify({ logger: true });
+function redactTokenFromUrl(url: string): string {
+  return url.replace(/([?&]token=)[^&]+/gi, '$1[REDACTED]');
+}
+
+const app = Fastify({
+  logger: {
+    level: 'info',
+    serializers: {
+      req(req) {
+        return {
+          method: req.method,
+          url: redactTokenFromUrl(req.url),
+        };
+      },
+    },
+  },
+});
 
 await app.register(cors, { origin: config.corsOrigin });
 registerAuth(app, config);
@@ -79,11 +95,17 @@ async function runReconcile(startup = false): Promise<void> {
   }
 }
 
+let reconcileInFlight = false;
+
 async function runReconcileSafe(startup = false): Promise<void> {
+  if (reconcileInFlight) return;
+  reconcileInFlight = true;
   try {
     await runReconcile(startup);
   } catch (err) {
     console.error('[reconcile] failed:', err instanceof Error ? err.message : err);
+  } finally {
+    reconcileInFlight = false;
   }
 }
 
@@ -97,10 +119,10 @@ async function start(): Promise<void> {
   if (config.host !== '127.0.0.1' && config.host !== 'localhost' && !config.apiToken) {
     console.warn('[auth] HOST is not loopback and TRACKSMITH_API_TOKEN is unset; API is exposed without auth');
   }
-  await runReconcileSafe(true);
   listener.start();
   await app.listen({ port: config.port, host: config.host });
   console.log(`Tracksmith listening on http://${config.host}:${config.port}`);
+  void runReconcileSafe(true);
 }
 
 start().catch((err) => {
