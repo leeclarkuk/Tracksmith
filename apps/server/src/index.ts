@@ -59,7 +59,7 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body,
 
 await app.register(cors, { origin: config.corsOrigin });
 registerAuth(app, config);
-registerRoutes(app, store, gateway, router, broadcast);
+registerRoutes(app, store, gateway, router, broadcast, pending);
 
 app.get('/api/stream', async (req, reply) => {
   reply.raw.writeHead(200, {

@@ -3,8 +3,10 @@ import { canTransitionColumn, deriveTitleSummary, resolveEngine, type Engine } f
 import type { ServerConfig } from './config.js';
 import type { CardStore } from './db/store.js';
 import type { EngineRouter } from './engine/router.js';
+import type { PendingRunRegistry } from './pending-runs.js';
 import { normalizeGoalContract } from './goal-contract.js';
 import type { GatewayClient } from './gateway/client.js';
+import { abandonLocalTracking, AbandonError } from './abandon.js';
 
 const ALLOWED_ENGINES: Engine[] = ['chat', 'task_runner', 'autopilot', 'auto'];
 const CREATE_COLUMNS = new Set(['backlog', 'todo']);
@@ -39,6 +41,7 @@ export function registerRoutes(
   gateway: GatewayClient,
   router: EngineRouter,
   broadcast: () => void,
+  pending: PendingRunRegistry,
 ): void {
   app.get('/api/health', async () => ({ ok: true }));
 
@@ -149,6 +152,20 @@ export function registerRoutes(
       return updated;
     } catch (err) {
       return badRequest(reply, err instanceof Error ? err.message : 'Correction failed');
+    }
+  });
+
+  app.post('/api/cards/:id/abandon', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const updated = await abandonLocalTracking(store, pending, id);
+      broadcast();
+      return updated;
+    } catch (err) {
+      if (err instanceof AbandonError) {
+        return reply.code(err.statusCode).send({ error: err.message });
+      }
+      return badRequest(reply, err instanceof Error ? err.message : 'Abandon failed');
     }
   });
 

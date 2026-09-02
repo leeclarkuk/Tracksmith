@@ -33,6 +33,7 @@ export const api = {
   moveColumn: (id: string, column: Column) =>
     request<OutcomeCard>(`/api/cards/${id}/column`, { method: 'PATCH', body: JSON.stringify({ column }) }),
   runCard: (id: string) => request<OutcomeCard>(`/api/cards/${id}/run`, { method: 'POST' }),
+  abandonCard: (id: string) => request<OutcomeCard>(`/api/cards/${id}/abandon`, { method: 'POST' }),
   correctCard: (id: string, instruction: string) =>
     request<OutcomeCard>(`/api/cards/${id}/correct`, { method: 'POST', body: JSON.stringify({ instruction }) }),
   hostUrl: (id: string) => request<{ url: string }>(`/api/cards/${id}/host-url`),
