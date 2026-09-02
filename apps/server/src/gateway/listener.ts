@@ -7,7 +7,7 @@ import { settleChatWithGoalContract, settleWithGoalContract, tryRunGoalRetry } f
 import type { EngineRouter } from '../engine/router.js';
 import type { PendingRunRegistry } from '../pending-runs.js';
 
-interface GatewayEvent {
+export interface GatewayEvent {
   type?: string;
   event?: string;
   slot_id?: string;
@@ -17,6 +17,28 @@ interface GatewayEvent {
   error?: string;
   message?: string;
   [key: string]: unknown;
+}
+
+export function eventLogContext(event: GatewayEvent): Record<string, unknown> {
+  return {
+    type: event.type ?? event.event ?? '',
+    slotId: event.slot_id ?? event.slotId ?? event.slot,
+    taskId: event.task_id ?? event.taskId,
+  };
+}
+
+export function catchDetached(
+  promise: Promise<unknown>,
+  label: string,
+  context: Record<string, unknown> = {},
+): Promise<void> {
+  return promise.then(
+    () => undefined,
+    (err: unknown) => {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[gateway-ws] ${label}`, { ...context, error });
+    },
+  );
 }
 
 export class GatewayListener {
@@ -69,14 +91,17 @@ export class GatewayListener {
       console.log('[gateway-ws] connected');
       this.reconnectAttempt = 0;
       if (this.reconcileFn) {
-        void this.reconcileFn().then(() => this.onUpdate());
+        void catchDetached(
+          this.reconcileFn().then(() => this.onUpdate()),
+          'reconcile on connect failed',
+        );
       }
     });
 
     this.ws.on('message', (raw) => {
       try {
         const event = JSON.parse(raw.toString()) as GatewayEvent;
-        void this.handleEvent(event);
+        void catchDetached(this.handleEvent(event), 'event handler failed', eventLogContext(event));
       } catch {
         // ignore malformed
       }

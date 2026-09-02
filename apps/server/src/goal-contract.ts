@@ -42,28 +42,6 @@ function matchWithoutLeadingNegation(text: string, pattern: RegExp): boolean {
   return false;
 }
 
-const NEGATED_SUBJECT_STOPWORDS = new Set([
-  'tests',
-  'test',
-  'existing',
-  'public',
-  'during',
-  'migration',
-  'step',
-  'task',
-  'unit',
-  'integration',
-  'changes',
-  'change',
-  'updated',
-  'added',
-]);
-
-const ERROR_WORDS = /\b(errors?)\b/i;
-
-const VIOLATION_SIGNALS =
-  /\b(fail(s|ed|ing|ure|ures)?|failure|failures|errors?|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
-
 const FAILURE_OR_ERROR = /\b(errors?|fail(s|ed|ing|ure|ures)?|failure|failures)\b/i;
 
 function matchFailureOrError(text: string): boolean {
@@ -74,33 +52,11 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function tokenPattern(token: string): RegExp {
-  if (token.endsWith('s') && token.length > 4) {
-    const stem = token.slice(0, -1);
-    return new RegExp(`\\b${escapeRegex(stem)}(s|ed|ing)?\\b`, 'gi');
-  }
-  return new RegExp(`\\b${escapeRegex(token)}\\b`, 'gi');
-}
-
-function hasSubjectViolation(text: string, subjectTokens: string[]): boolean {
-  const meaningful = subjectTokens.filter((t) => t.length > 3 && !NEGATED_SUBJECT_STOPWORDS.has(t));
-  if (!meaningful.length) return false;
-
-  if (meaningful.some((t) => /\bfail/.test(t) || t === 'errors')) {
-    return matchFailureOrError(text);
-  }
-
-  for (const token of meaningful) {
-    const re = tokenPattern(token);
-    for (const match of text.matchAll(re)) {
-      const index = match.index ?? 0;
-      const before = text.slice(Math.max(0, index - 24), index);
-      if (/\b(not|no|without|never|didn't|did not|failed to)\s*$/i.test(before)) continue;
-      const window = text.slice(Math.max(0, index - 16), Math.min(text.length, index + token.length + 48));
-      if (VIOLATION_SIGNALS.test(window)) return true;
-    }
-  }
-  return false;
+function stripLeadingNegator(needle: string): { negated: boolean; subject: string } {
+  const match = needle.match(/^(no|not|without|never|zero)\b\s*(.*)$/i);
+  const subject = match?.[2]?.trim() ?? '';
+  if (!match || !subject) return { negated: false, subject: needle };
+  return { negated: true, subject };
 }
 
 export function evaluateAcceptanceCriteria(
@@ -112,29 +68,15 @@ export function evaluateAcceptanceCriteria(
   return criteria.map((criterion) => {
     const needle = criterion.trim();
     const lowerNeedle = needle.toLowerCase();
-    const negated = /\b(no|not|without|never|zero)\b/i.test(needle);
-    const subject = needle.replace(/\b(no|not|without|never|zero)\b/gi, ' ').replace(/\s+/g, ' ').trim();
-    const subjectLower = subject.toLowerCase();
-    const subjectTokens = subjectLower.split(/\s+/).filter((t) => t.length > 3);
+    const { negated, subject } = stripLeadingNegator(lowerNeedle);
+    const subjectLower = subject.replace(/\s+/g, ' ').trim();
     const passCriterion = /\bpass(ed|es)?\b/i.test(subjectLower);
     const failureCriterion =
       !negated && !passCriterion && /^(fail|failure|expect(ed)?\s+fail)/i.test(subjectLower.trim());
 
     let matched: boolean;
     if (negated) {
-      let prohibited = false;
-      if (failureCriterion || ERROR_WORDS.test(subjectLower)) {
-        prohibited = matchFailureOrError(lower);
-      } else if (passCriterion) {
-        prohibited = matchFailureOrError(lower);
-      } else if (subjectTokens.length > 0) {
-        prohibited = hasSubjectViolation(lower, subjectTokens);
-      } else if (subjectLower.length > 0) {
-        prohibited = matchWithoutLeadingNegation(
-          lower,
-          new RegExp(subjectLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-        );
-      }
+      const prohibited = matchWithoutLeadingNegation(lower, new RegExp(escapeRegex(subjectLower), 'i'));
       matched = !prohibited;
     } else {
       const tokens = lowerNeedle.split(/\s+/).filter((t) => t.length > 3);
