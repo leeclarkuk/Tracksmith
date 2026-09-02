@@ -14,8 +14,10 @@ export function DetailDrawer({ card, onClose, onRefresh }: Props) {
   const [tab, setTab] = useState<Tab>('result');
   const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
+  const [abandonError, setAbandonError] = useState<string | null>(null);
   const packet = card.resultPacket;
   const isRunning = card.column === 'running';
+  const isRunningChat = isRunning && card.runRef?.kind === 'chat';
 
   async function handleCorrect() {
     if (!instruction.trim() || isRunning) return;
@@ -24,6 +26,24 @@ export function DetailDrawer({ card, onClose, onRefresh }: Props) {
       await api.correctCard(card.id, instruction.trim());
       setInstruction('');
       await onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAbandon() {
+    if (!isRunningChat || busy) return;
+    const confirmed = window.confirm(
+      'Abandon local tracking? This does not stop the Host run. The Host session stays available via Open Host.',
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setAbandonError(null);
+    try {
+      await api.abandonCard(card.id);
+      await onRefresh();
+    } catch (err) {
+      setAbandonError(err instanceof Error ? err.message : 'Abandon failed');
     } finally {
       setBusy(false);
     }
@@ -64,6 +84,17 @@ export function DetailDrawer({ card, onClose, onRefresh }: Props) {
         <div className="drawer-body">
           {card.failureReason && card.column !== 'running' && (
             <div className="banner-warn">{card.failureReason}</div>
+          )}
+          {abandonError && <div className="banner-warn">{abandonError}</div>}
+          {isRunningChat && (
+            <div className="drawer-section">
+              <button className="btn" disabled={busy} onClick={handleAbandon}>
+                Abandon local tracking
+              </button>
+              <p style={{ margin: '8px 0 0', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                Stops Tracksmith tracking only. It does not stop the Host run.
+              </p>
+            </div>
           )}
 
           {tab === 'result' && (
@@ -147,13 +178,16 @@ export function DetailDrawer({ card, onClose, onRefresh }: Props) {
 
           {tab === 'changes' && (
             <div className="drawer-section">
-              {[...card.evidence, ...(packet?.artifacts ?? [])]
-                .filter((e) => 'kind' in e && (e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path'))
-                .map((e, i) => (
-                  <div key={i} className="artifact-link">
-                    {'label' in e ? e.label : e.value}: {'value' in e ? e.value : ''}
-                  </div>
-                ))}
+              {[
+                ...card.evidence.filter((e) => e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path'),
+                ...(packet?.artifacts ?? []).filter(
+                  (a) => a.kind === 'commit' || a.kind === 'branch' || a.kind === 'path',
+                ),
+              ].map((e, i) => (
+                <div key={i} className="artifact-link">
+                  {e.label}: {e.value}
+                </div>
+              ))}
               {card.evidence.filter((e) => e.kind === 'commit' || e.kind === 'branch' || e.kind === 'path').length === 0 && (
                 <p style={{ color: 'var(--text-muted)' }}>No change artifacts recorded.</p>
               )}

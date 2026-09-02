@@ -19,13 +19,13 @@ export function CardView({ card, overlay, onOpen, onRun, onHost }: Props) {
           <span className="pill pill-resolved">→ {card.resolvedEngine}</span>
         )}
       </div>
-      {card.failureReason && card.column === 'todo' && (
+      {card.failureReason && (card.column === 'todo' || card.column === 'backlog') && (
         <div className="banner-warn" style={{ marginBottom: 8, fontSize: '0.7rem' }}>
           {card.failureReason}
         </div>
       )}
       <div className="card-actions">
-        {card.column === 'todo' && onRun && (
+        {(card.column === 'todo' || card.column === 'backlog') && onRun && (
           <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); onRun(); }}>
             Run
           </button>

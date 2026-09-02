@@ -42,7 +42,7 @@ Environment: copy `.env.example` to `.env`. Key vars: `GATEWAY_URL`, `GATEWAY_TO
 
 ## Independent review gate (mandatory)
 
-Before opening or updating a pull request on integration-heavy work, run the **independent reviewer** subagent (`bugbot` with Opus). This is a hard gate, not optional commentary.
+Before opening or updating a pull request on integration-heavy work, run an **independent Opus review**. This is a hard gate, not optional commentary.
 
 ### When to run
 
@@ -58,16 +58,34 @@ Run review before PR when changes touch any of:
 
 Skip for docs-only or purely cosmetic UI tweaks unless they affect run lifecycle.
 
-### Required reviewer prompt
+### Preferred path: Opus review (not bugbot subagent)
 
-Use this form (fill in scope):
+Use a **general-purpose Opus agent** (`claude-opus-5-thinking-high`), not the `bugbot` subagent. The bugbot wrapper often omits the required verdict line even when it reports "no bugs".
+
+Paste the prompt below verbatim. The reviewer must produce a normal written review, then end with the verdict line.
+
+### Required reviewer prompt
 
 ```
 Full Repository Path: /workspace
 Diff: branch changes
-Custom Instructions: Review Tracksmith changes on this branch. Focus on gateway adapter correctness, column state machine enforcement, Running non-droppable behaviour, restart reconciliation, goal contract bounded loop, evidence persistence, Task Runner enablement guard, inline correction disabled while running, and security (no browser-to-gateway calls).
 
-You MUST end your review with exactly one verdict line:
+You are the independent reviewer for Tracksmith. Review the full branch diff against main.
+
+Focus:
+- Gateway adapter correctness (REST, WS, deferred settlement, periodic reconcile)
+- Column state machine enforcement; Running not a drop target
+- Restart and periodic reconciliation; pending run registry lifecycle
+- Goal contract bounded loop, auto-retry, acceptance criteria eval
+- Evidence persistence and corpus scoping
+- Task Runner enablement guard; inline correction disabled while running
+- Security: no browser-to-gateway calls; BFF auth defaults
+
+Output format (required):
+
+1. Short summary (2–4 sentences)
+2. Findings (if any), ranked by severity with file paths. Omit section if none.
+3. Final line ONLY — no text after it:
 
 VERDICT: PASS
 
@@ -75,12 +93,18 @@ or
 
 VERDICT: DENY
 
-Rules:
-- PASS: no material issues, or only nits that do not block merge.
-- DENY: one or more issues that must be fixed before merge. List findings ranked by severity with file paths above the verdict.
-- Do not return findings without a verdict.
-- Do not use PASS if any high-severity issue remains open.
+Verdict rules:
+- PASS: no material issues, or only nits that do not block merge
+- DENY: one or more issues that must be fixed before merge
+- Do not return findings without a verdict
+- Do not use PASS if any high-severity issue remains open
+- Do not substitute "no bugs" or "LGTM" for the verdict line
+- The last line of your entire response must be exactly VERDICT: PASS or VERDICT: DENY
 ```
+
+### Fallback: bugbot subagent
+
+Only if a general Opus agent is unavailable, use `bugbot` with the same prompt. If the response lacks `VERDICT: PASS` or `VERDICT: DENY` as the final line, treat the run as **incomplete** and re-run via Opus (not bugbot).
 
 ### Agent workflow after review
 
@@ -88,9 +112,9 @@ Rules:
 |---------|--------------|
 | **VERDICT: PASS** | Commit fixes (if any nits were addressed), push, open or update PR. |
 | **VERDICT: DENY** | Fix every listed issue, re-run the reviewer on the updated branch, repeat until **PASS**. Do not open or mark PR ready while verdict is DENY. |
-| No verdict line | Treat as incomplete. Re-run reviewer with the prompt above. Do not merge. |
+| No verdict line | Treat as incomplete. Re-run via Opus with the prompt above. Do not merge. |
 
-Record the final **VERDICT: PASS** in the PR description under a **Review** section.
+Record the final **VERDICT: PASS** in the PR description under a **Review** section, including reviewer type (Opus independent / bugbot fallback).
 
 ### Architecture review (optional, larger changes)
 

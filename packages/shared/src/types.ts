@@ -22,6 +22,7 @@ export interface GoalContract {
   attemptCount: number;
   tokenUsed: number;
   startedAt?: string;
+  attemptStartedAt?: string;
 }
 
 export interface CheckResult {

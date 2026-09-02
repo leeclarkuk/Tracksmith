@@ -1,59 +1,148 @@
-import type { OutcomeCard } from '@tracksmith/shared';
-import type { CardStore } from './db/store.js';
-import type { GatewayClient, TaskRunRecord } from './gateway/client.js';
-import { Projector } from './gateway/projector.js';
+import type { CheckResult, GoalContract } from '@tracksmith/shared';
 
-export async function evaluateGoalContract(
-  card: OutcomeCard,
-  run: TaskRunRecord | null,
-  store: CardStore,
-  projector: Projector,
-): Promise<OutcomeCard> {
-  const contract = card.goalContract;
-  if (!contract?.continueUntilVerified) {
-    return projector.settleTask(card, run);
+export function normalizeGoalContract(input?: Partial<GoalContract>): GoalContract | undefined {
+  if (!input?.continueUntilVerified) return undefined;
+  const criteria = (input.acceptanceCriteria ?? []).map((c) => c.trim()).filter(Boolean);
+  if (!criteria.length) {
+    throw new Error('Goal contract requires at least one acceptance criterion');
   }
-
-  const now = Date.now();
-  const started = contract.startedAt ? new Date(contract.startedAt).getTime() : now;
-  const elapsedSec = (now - started) / 1000;
-  const tokens = contract.tokenUsed + (run?.tokens_used ?? 0);
-
-  let settled = await projector.settleTask(card, run);
-  const allChecksPassed = settled.resultPacket?.checks.every((c: { passed: boolean }) => c.passed) ?? false;
-
-  if (allChecksPassed) {
-    store.save(settled);
-    return settled;
+  const maxAttempts = input.maxAttempts === undefined ? 3 : Number(input.maxAttempts);
+  const maxWallClockSeconds = input.maxWallClockSeconds === undefined ? 3600 : Number(input.maxWallClockSeconds);
+  const maxTokenBudget = input.maxTokenBudget === undefined ? 500000 : Number(input.maxTokenBudget);
+  if (!Number.isFinite(maxAttempts) || maxAttempts < 1 || maxAttempts > 100) {
+    throw new Error('Goal contract maxAttempts must be a finite number between 1 and 100');
   }
-
-  const limitsExceeded =
-    contract.attemptCount >= contract.maxAttempts ||
-    elapsedSec >= contract.maxWallClockSeconds ||
-    tokens >= contract.maxTokenBudget;
-
-  if (limitsExceeded) {
-    settled.column = 'failed';
-    settled.failureReason = 'Goal contract limits exhausted before verification passed';
-    settled.resultPacket!.nextActions = ['Relax acceptance criteria or increase limits, then retry'];
-    settled.settledAt = new Date().toISOString();
-    store.save(settled);
-    return settled;
+  if (!Number.isFinite(maxWallClockSeconds) || maxWallClockSeconds < 60 || maxWallClockSeconds > 86_400) {
+    throw new Error('Goal contract maxWallClockSeconds must be a finite number between 60 and 86400');
   }
+  if (!Number.isFinite(maxTokenBudget) || maxTokenBudget < 1000 || maxTokenBudget > 10_000_000) {
+    throw new Error('Goal contract maxTokenBudget must be a finite number between 1000 and 10000000');
+  }
+  return {
+    acceptanceCriteria: criteria,
+    maxAttempts: Math.floor(maxAttempts),
+    maxWallClockSeconds: Math.floor(maxWallClockSeconds),
+    maxTokenBudget: Math.floor(maxTokenBudget),
+    continueUntilVerified: true,
+    attemptCount: 0,
+    tokenUsed: 0,
+  };
+}
 
-  settled.column = 'todo';
-  settled.failureReason = undefined;
-  settled.settledAt = undefined;
-  settled.resultPacket!.nextActions = [
-    'Verification incomplete. Review checks and run again.',
-    ...settled.resultPacket!.nextActions,
-  ];
-  settled.audit.push({
-    id: crypto.randomUUID(),
-    at: new Date().toISOString(),
-    kind: 'goal_retry',
-    message: `Attempt ${contract.attemptCount}/${contract.maxAttempts} did not pass all checks`,
+function matchWithoutLeadingNegation(text: string, pattern: RegExp): boolean {
+  for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.includes('i') ? 'gi' : 'g'))) {
+    const index = match.index ?? 0;
+    const before = text.slice(Math.max(0, index - 24), index);
+    if (/\b(not|no|without|never|zero|didn't|did not|failed to)\s*$/i.test(before)) continue;
+    if (/\b0\s+$/.test(before)) continue;
+    const after = text.slice(index + match[0].length, index + match[0].length + 8);
+    if (/^\s*:\s*0\b/.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
+const FAILURE_OR_ERROR = /\b(errors?|fail(s|ed|ing|ure|ures)?|failure|failures)\b/i;
+
+function matchFailureOrError(text: string): boolean {
+  return matchWithoutLeadingNegation(text, FAILURE_OR_ERROR);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripLeadingNegator(needle: string): { negated: boolean; subject: string } {
+  const match = needle.match(/^(no|not|without|never|zero)\b\s*(.*)$/i);
+  const subject = match?.[2]?.trim() ?? '';
+  if (!match || !subject) return { negated: false, subject: needle };
+  return { negated: true, subject };
+}
+
+export function evaluateAcceptanceCriteria(
+  criteria: string[],
+  corpus: string,
+): CheckResult[] {
+  if (!criteria.length) return [];
+  const lower = corpus.toLowerCase();
+  return criteria.map((criterion) => {
+    const needle = criterion.trim();
+    const lowerNeedle = needle.toLowerCase();
+    const { negated, subject } = stripLeadingNegator(lowerNeedle);
+    const subjectLower = subject.replace(/\s+/g, ' ').trim();
+    const passCriterion = /\bpass(ed|es)?\b/i.test(subjectLower);
+    const failureCriterion =
+      !negated && !passCriterion && /^(fail|failure|expect(ed)?\s+fail)/i.test(subjectLower.trim());
+
+    let matched: boolean;
+    if (negated) {
+      const prohibited = matchWithoutLeadingNegation(lower, new RegExp(escapeRegex(subjectLower), 'i'));
+      matched = !prohibited;
+    } else {
+      const tokens = lowerNeedle.split(/\s+/).filter((t) => t.length > 3);
+      const tokenHits =
+        tokens.length > 0
+          ? tokens.filter((t) => matchWithoutLeadingNegation(lower, new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'))).length
+          : 0;
+      const fuzzyMatch = tokens.length > 0 && tokenHits >= Math.ceil(tokens.length * 0.75);
+      const exactMatch = matchWithoutLeadingNegation(lower, new RegExp(lowerNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+      matched = exactMatch || fuzzyMatch;
+      if (passCriterion) {
+        const passSignal = matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) && !matchFailureOrError(lower);
+        const subjectForPass = subjectLower.replace(/\bpass(ed|es)?\b/gi, ' ').replace(/\s+/g, ' ').trim();
+        const passSubjectTokens = subjectForPass.split(/\s+/).filter((t) => t.length > 3);
+        if (passSubjectTokens.length === 0) {
+          matched = false;
+        } else {
+          const passTokenHits = passSubjectTokens.filter((t) =>
+            matchWithoutLeadingNegation(lower, new RegExp(`\\b${escapeRegex(t)}\\b`, 'i')),
+          ).length;
+          const subjectMatch = passTokenHits >= Math.ceil(passSubjectTokens.length * 0.75);
+          matched = passSignal && subjectMatch;
+        }
+      } else if (failureCriterion) {
+        matched = matchFailureOrError(lower);
+      }
+    }
+
+    return {
+      name: needle,
+      passed: matched,
+      evidence: matched
+        ? negated
+          ? 'Prohibited content not found in run output'
+          : 'Criterion reflected in run output'
+        : negated
+          ? 'Prohibited content found in run output'
+          : 'Criterion not found in run output',
+    };
   });
-  store.save(settled);
-  return settled;
+}
+
+export function mergeAcceptanceChecks(
+  existing: CheckResult[],
+  contract: GoalContract | undefined,
+  corpus: string,
+): CheckResult[] {
+  if (!contract?.continueUntilVerified || !contract.acceptanceCriteria.length) {
+    return existing;
+  }
+  const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
+  const names = new Set(acceptance.map((c) => c.name));
+  const rest = existing.filter((c) => !names.has(c.name));
+  return [...acceptance, ...rest];
+}
+
+export function goalContractCorpus(parts: string[]): string {
+  return parts.filter(Boolean).join('\n');
+}
+
+export function isGoalContractElapsed(contract: GoalContract): boolean {
+  if (!contract.startedAt) return false;
+  const elapsedSec = (Date.now() - new Date(contract.startedAt).getTime()) / 1000;
+  return elapsedSec >= contract.maxWallClockSeconds;
+}
+
+export function allChecksPassed(checks: CheckResult[]): boolean {
+  return checks.length > 0 && checks.every((c) => c.passed);
 }

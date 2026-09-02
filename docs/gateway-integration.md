@@ -27,7 +27,7 @@ Loopback may work tokenless; remote Host requires token on every REST and WebSoc
 
 ### Task Runner
 
-- `POST /api/taskrunner` — start run from inline spec markdown
+- `POST /api/taskrunner` — start run from inline spec markdown (`__inline__:` prefix applied by BFF)
 - `GET /api/taskrunner` — list runs
 - `GET /api/taskrunner/{id}` — run detail with step results
 - `POST /api/taskrunner/{id}/pause` — pause run
@@ -41,6 +41,7 @@ Loopback may work tokenless; remote Host requires token on every REST and WebSoc
 
 - Connect: `ws://{host}/api/ws` (with token query param when required)
 - Events: `chat_done`, `chat_error`, `chat_chunk`, `task_update`, `task_complete`, `tool_call`, `notification`
+- Slot id fields: `slot_id`, `slotId`, or `slot`
 
 ## Dashboard deep links
 

@@ -1,11 +1,23 @@
-import type { Column, CreateCardInput, Engine, OutcomeCard } from '@tracksmith/shared';
+import type { Column, CreateCardInput, OutcomeCard } from '@tracksmith/shared';
 
 const BASE = '';
+const API_TOKEN = import.meta.env.VITE_TRACKSMITH_API_TOKEN as string | undefined;
+
+function authHeaders(body?: BodyInit | null): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (body != null && body !== '') {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (API_TOKEN) {
+    headers.Authorization = `Bearer ${API_TOKEN}`;
+  }
+  return headers;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
+    headers: { ...authHeaders(init?.body), ...init?.headers },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -21,6 +33,7 @@ export const api = {
   moveColumn: (id: string, column: Column) =>
     request<OutcomeCard>(`/api/cards/${id}/column`, { method: 'PATCH', body: JSON.stringify({ column }) }),
   runCard: (id: string) => request<OutcomeCard>(`/api/cards/${id}/run`, { method: 'POST' }),
+  abandonCard: (id: string) => request<OutcomeCard>(`/api/cards/${id}/abandon`, { method: 'POST' }),
   correctCard: (id: string, instruction: string) =>
     request<OutcomeCard>(`/api/cards/${id}/correct`, { method: 'POST', body: JSON.stringify({ instruction }) }),
   hostUrl: (id: string) => request<{ url: string }>(`/api/cards/${id}/host-url`),
@@ -28,7 +41,8 @@ export const api = {
 };
 
 export function subscribeCards(onUpdate: (cards: OutcomeCard[]) => void): () => void {
-  const es = new EventSource('/api/stream');
+  const streamUrl = API_TOKEN ? `/api/stream?token=${encodeURIComponent(API_TOKEN)}` : '/api/stream';
+  const es = new EventSource(streamUrl);
   es.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data) as { cards?: OutcomeCard[] };

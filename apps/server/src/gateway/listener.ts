@@ -1,10 +1,13 @@
+import type { OutcomeCard } from '@tracksmith/shared';
 import WebSocket from 'ws';
 import type { CardStore } from '../db/store.js';
 import type { GatewayClient } from '../gateway/client.js';
 import { Projector } from '../gateway/projector.js';
-import { evaluateGoalContract } from '../goal-contract.js';
+import { settleChatWithGoalContract, settleWithGoalContract, tryRunGoalRetry } from '../goal-eval.js';
+import type { EngineRouter } from '../engine/router.js';
+import type { PendingRunRegistry } from '../pending-runs.js';
 
-interface GatewayEvent {
+export interface GatewayEvent {
   type?: string;
   event?: string;
   slot_id?: string;
@@ -16,16 +19,42 @@ interface GatewayEvent {
   [key: string]: unknown;
 }
 
+export function eventLogContext(event: GatewayEvent): Record<string, unknown> {
+  return {
+    type: event.type ?? event.event ?? '',
+    slotId: event.slot_id ?? event.slotId ?? event.slot,
+    taskId: event.task_id ?? event.taskId,
+  };
+}
+
+export function catchDetached(
+  promise: Promise<unknown>,
+  label: string,
+  context: Record<string, unknown> = {},
+): Promise<void> {
+  return promise.then(
+    () => undefined,
+    (err: unknown) => {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[gateway-ws] ${label}`, { ...context, error });
+    },
+  );
+}
+
 export class GatewayListener {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private stopped = false;
   private projector: Projector;
   private reconcileFn: (() => Promise<void>) | null = null;
 
   constructor(
     private gateway: GatewayClient,
     private store: CardStore,
+    private pending: PendingRunRegistry,
     private onUpdate: () => void,
+    private router?: EngineRouter,
   ) {
     this.projector = new Projector(gateway);
   }
@@ -35,13 +64,19 @@ export class GatewayListener {
   }
 
   start(): void {
+    this.stopped = false;
     this.connect();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.ws?.close();
-    this.ws = null;
+    this.reconnectTimer = null;
+    if (this.ws) {
+      this.ws.removeAllListeners('close');
+      this.ws.close();
+      this.ws = null;
+    }
   }
 
   private connect(): void {
@@ -54,15 +89,19 @@ export class GatewayListener {
 
     this.ws.on('open', () => {
       console.log('[gateway-ws] connected');
+      this.reconnectAttempt = 0;
       if (this.reconcileFn) {
-        void this.reconcileFn().then(() => this.onUpdate());
+        void catchDetached(
+          this.reconcileFn().then(() => this.onUpdate()),
+          'reconcile on connect failed',
+        );
       }
     });
 
     this.ws.on('message', (raw) => {
       try {
         const event = JSON.parse(raw.toString()) as GatewayEvent;
-        void this.handleEvent(event);
+        void catchDetached(this.handleEvent(event), 'event handler failed', eventLogContext(event));
       } catch {
         // ignore malformed
       }
@@ -70,7 +109,8 @@ export class GatewayListener {
 
     this.ws.on('close', () => {
       console.log('[gateway-ws] disconnected');
-      this.scheduleReconnect();
+      this.ws = null;
+      if (!this.stopped) this.scheduleReconnect();
     });
 
     this.ws.on('error', () => {
@@ -79,72 +119,159 @@ export class GatewayListener {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.stopped || this.reconnectTimer) return;
+    const delayMs = Math.min(60_000, 5000 * 2 ** this.reconnectAttempt);
+    this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, 5000);
+    }, delayMs);
+  }
+
+  private resolveCardId(kind: 'chat' | 'task_runner', id: string): string | undefined {
+    const pending = kind === 'chat' ? this.pending.cardForSlot(id) : this.pending.cardForTask(id);
+    if (pending) return pending;
+    return this.store.findByRunRef(kind, id)?.id;
+  }
+
+  private async maybeAutoRetryGoal(card: OutcomeCard): Promise<void> {
+    if (!this.router) return;
+    const retried = await tryRunGoalRetry(this.router, card);
+    if (retried) this.onUpdate();
+  }
+
+  private clearPendingForCard(card: OutcomeCard): void {
+    if (card.column !== 'running') {
+      this.pending.clear(card.id);
+    }
   }
 
   private async handleEvent(event: GatewayEvent): Promise<void> {
     const type = event.type ?? event.event ?? '';
-    const slotId = event.slot_id ?? event.slotId;
+    const slotId = event.slot_id ?? event.slotId ?? (event.slot as string | undefined);
     const taskId = event.task_id ?? event.taskId;
 
     if (type === 'tool_call') {
-      const card = slotId
-        ? this.store.findByRunRef('chat', slotId)
+      const cardId = slotId
+        ? this.resolveCardId('chat', slotId)
         : taskId
-          ? this.store.findByRunRef('task_runner', taskId)
+          ? this.resolveCardId('task_runner', taskId)
           : undefined;
-      if (card) {
-        this.store.save(this.projector.handleToolCall(card, event));
-        this.onUpdate();
-      }
+      if (!cardId) return;
+      await this.store.mutate(cardId, (card) => {
+        if (card.column !== 'running') return null;
+        return this.projector.handleToolCall(card, event);
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'chat_done' && slotId) {
-      const card = this.store.findByRunRef('chat', slotId);
-      if (card && card.column === 'running') {
+      const cardId = this.resolveCardId('chat', slotId);
+      if (!cardId) return;
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running') return null;
+        if (card.goalContract?.continueUntilVerified) {
+          const settled = await settleChatWithGoalContract(card, this.projector, false);
+          if (settled) this.clearPendingForCard(settled);
+          return settled;
+        }
         const settled = await this.projector.settleChat(card, false);
-        this.store.save(settled);
-        this.onUpdate();
-      }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      }).then((updated) => {
+        if (updated) {
+          void this.maybeAutoRetryGoal(updated).catch((err) => {
+            console.warn('[goal-retry] chat_done:', err instanceof Error ? err.message : err);
+          });
+        }
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'chat_error' && slotId) {
-      const card = this.store.findByRunRef('chat', slotId);
-      if (card && card.column === 'running') {
+      const cardId = this.resolveCardId('chat', slotId);
+      if (!cardId) return;
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running') return null;
         const settled = await this.projector.settleChat(card, true, event.error ?? event.message ?? 'chat_error');
-        this.store.save(settled);
-        this.onUpdate();
-      }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'task_update' && taskId) {
-      const card = this.store.findByRunRef('task_runner', taskId);
-      if (card) {
-        const message = String(event.message ?? event.status ?? type);
-        this.store.appendAudit(card, 'recovery', `Task update: ${message}`);
-        this.store.appendEvidence(card, { kind: 'note', label: 'Task update', value: message.slice(0, 500) });
-        this.onUpdate();
-      }
+      const cardId = this.resolveCardId('task_runner', taskId);
+      if (!cardId) return;
+      const message = String(event.message ?? event.status ?? type);
+      await this.store.mutate(cardId, (card) => {
+        if (card.column !== 'running') return null;
+        card.audit.push({
+          id: crypto.randomUUID(),
+          at: new Date().toISOString(),
+          kind: 'recovery',
+          message: `Task update: ${message}`,
+        });
+        card.evidence.push({
+          id: crypto.randomUUID(),
+          kind: 'note',
+          label: 'Task update',
+          value: message.slice(0, 500),
+          createdAt: new Date().toISOString(),
+        });
+        return card;
+      });
+      this.onUpdate();
       return;
     }
 
     if (type === 'task_complete' && taskId) {
-      const card = this.store.findByRunRef('task_runner', taskId);
-      if (card && card.column === 'running') {
-        const run = await this.gateway.getTaskRun(taskId);
-        const settled = card.goalContract?.continueUntilVerified
-          ? await evaluateGoalContract(card, run, this.store, this.projector)
-          : await this.projector.settleTask(card, run);
-        this.store.save(settled);
-        this.onUpdate();
+      const cardId = this.resolveCardId('task_runner', taskId);
+      if (!cardId) {
+        this.pending.noteTaskComplete(taskId);
+        return;
       }
+      await this.store.mutate(cardId, async (card) => {
+        if (card.column !== 'running' || card.runRef?.taskId !== taskId) return null;
+        const runResult = await this.gateway.getTaskRunResult(taskId);
+        if (runResult.status === 'unreachable' || runResult.status === 'error' || runResult.status === 'not_found') {
+          card.audit.push({
+            id: crypto.randomUUID(),
+            at: new Date().toISOString(),
+            kind: 'recovery',
+            message: `Task settlement deferred: ${runResult.message ?? runResult.status}`,
+          });
+          return card;
+        }
+        const run = runResult.status === 'ok' ? (runResult.data ?? null) : null;
+        if (!run) {
+          card.audit.push({
+            id: crypto.randomUUID(),
+            at: new Date().toISOString(),
+            kind: 'recovery',
+            message: 'Task settlement deferred: empty run record',
+          });
+          return card;
+        }
+        let settled: OutcomeCard | null | undefined;
+        if (card.goalContract?.continueUntilVerified) {
+          settled = await settleWithGoalContract(card, run, this.projector);
+        } else {
+          settled = await this.projector.settleTask(card, run);
+        }
+        if (settled) this.clearPendingForCard(settled);
+        return settled;
+      }).then((updated) => {
+        if (updated) {
+          void this.maybeAutoRetryGoal(updated).catch((err) => {
+            console.warn('[goal-retry] task_complete:', err instanceof Error ? err.message : err);
+          });
+        }
+      });
+      this.onUpdate();
     }
   }
 }
