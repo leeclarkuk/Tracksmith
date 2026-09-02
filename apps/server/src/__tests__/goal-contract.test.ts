@@ -53,6 +53,18 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(false);
   });
 
+  it('passes all tests pass with zero failures on clean output', () => {
+    const corpus =
+      'Step 1 PASSED unit tests / Step 2 PASSED integration tests / Task completed: 2/2 steps passed';
+    expect(evaluateAcceptanceCriteria(['all tests pass with zero failures'], corpus)[0]?.passed).toBe(true);
+  });
+
+  it('passes no errors when output reports zero errors', () => {
+    expect(
+      evaluateAcceptanceCriteria(['no errors'], 'Step 1 PASSED build completed with 0 errors')[0]?.passed,
+    ).toBe(true);
+  });
+
   it('fails all tests pass when failures remain in output', () => {
     expect(
       evaluateAcceptanceCriteria(['all tests pass'], 'Suite finished: tests passed, 2 failures remain')[0]?.passed,

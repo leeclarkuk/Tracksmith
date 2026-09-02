@@ -144,6 +144,9 @@ export class EngineRouter {
 
       if (current.runRef?.kind === 'chat' && current.runRef.slotId) {
         current.column = 'running';
+        if (current.goalContract?.continueUntilVerified) {
+          current.goalContract.attemptStartedAt = new Date().toISOString();
+        }
         try {
           await this.gateway.sendMessage(current.runRef.slotId, instruction);
         } catch (err) {

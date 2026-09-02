@@ -33,7 +33,10 @@ function matchWithoutLeadingNegation(text: string, pattern: RegExp): boolean {
   for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.includes('i') ? 'gi' : 'g'))) {
     const index = match.index ?? 0;
     const before = text.slice(Math.max(0, index - 24), index);
-    if (/\b(not|no|without|never|didn't|did not|failed to)\s*$/i.test(before)) continue;
+    if (/\b(not|no|without|never|zero|didn't|did not|failed to)\s*$/i.test(before)) continue;
+    if (/\b0\s+$/.test(before)) continue;
+    const after = text.slice(index + match[0].length, index + match[0].length + 8);
+    if (/^\s*:\s*0\b/.test(after)) continue;
     return true;
   }
   return false;
@@ -83,6 +86,10 @@ function hasSubjectViolation(text: string, subjectTokens: string[]): boolean {
   const meaningful = subjectTokens.filter((t) => t.length > 3 && !NEGATED_SUBJECT_STOPWORDS.has(t));
   if (!meaningful.length) return false;
 
+  if (meaningful.some((t) => /\bfail/.test(t) || t === 'errors')) {
+    return matchFailureOrError(text);
+  }
+
   for (const token of meaningful) {
     const re = tokenPattern(token);
     for (const match of text.matchAll(re)) {
@@ -105,12 +112,13 @@ export function evaluateAcceptanceCriteria(
   return criteria.map((criterion) => {
     const needle = criterion.trim();
     const lowerNeedle = needle.toLowerCase();
-    const negated = /\b(no|not|without|never)\b/i.test(needle);
-    const subject = needle.replace(/\b(no|not|without|never)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    const negated = /\b(no|not|without|never|zero)\b/i.test(needle);
+    const subject = needle.replace(/\b(no|not|without|never|zero)\b/gi, ' ').replace(/\s+/g, ' ').trim();
     const subjectLower = subject.toLowerCase();
     const subjectTokens = subjectLower.split(/\s+/).filter((t) => t.length > 3);
-    const failureCriterion = FAILURE_OR_ERROR.test(subjectLower);
     const passCriterion = /\bpass(ed|es)?\b/i.test(subjectLower);
+    const failureCriterion =
+      !negated && !passCriterion && /^(fail|failure|expect(ed)?\s+fail)/i.test(subjectLower.trim());
 
     let matched: boolean;
     if (negated) {
@@ -137,10 +145,10 @@ export function evaluateAcceptanceCriteria(
       const fuzzyMatch = tokens.length > 0 && tokenHits >= Math.ceil(tokens.length * 0.75);
       const exactMatch = matchWithoutLeadingNegation(lower, new RegExp(lowerNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
       matched = exactMatch || fuzzyMatch;
-      if (failureCriterion) {
-        matched = matchFailureOrError(lower);
-      } else if (passCriterion) {
+      if (passCriterion) {
         matched = matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) && !matchFailureOrError(lower);
+      } else if (failureCriterion) {
+        matched = matchFailureOrError(lower);
       }
     }
 

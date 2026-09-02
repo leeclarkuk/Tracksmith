@@ -17,18 +17,28 @@ function audit(card: OutcomeCard, message: string): void {
 }
 
 function hasDeferredSettlement(card: OutcomeCard): boolean {
-  const recent = card.audit.slice(-12);
-  return recent.some(
+  const attemptStart = currentAttemptStart(card);
+  const scoped = attemptStart
+    ? card.audit.filter((a) => new Date(a.at).getTime() >= new Date(attemptStart).getTime())
+    : card.audit.slice(-12);
+  return scoped.some(
     (a) =>
       a.message?.includes('Settlement deferred') ||
       a.message?.includes('Task settlement deferred'),
   );
 }
 
+function currentAttemptStart(card: OutcomeCard): string | undefined {
+  const runStarted = [...card.audit].reverse().find((a) => a.kind === 'run_started' || a.kind === 'correction')?.at;
+  const candidates = [runStarted, card.goalContract?.attemptStartedAt].filter(Boolean) as string[];
+  if (!candidates.length) return undefined;
+  return candidates.reduce((latest, value) =>
+    new Date(value).getTime() > new Date(latest).getTime() ? value : latest,
+  );
+}
+
 function isChatRunStale(card: OutcomeCard): boolean {
-  const attemptStart =
-    card.goalContract?.attemptStartedAt ??
-    [...card.audit].reverse().find((a) => a.kind === 'run_started' || a.kind === 'correction')?.at;
+  const attemptStart = currentAttemptStart(card);
   if (!attemptStart) return false;
   return Date.now() - new Date(attemptStart).getTime() > 5 * 60 * 1000;
 }
@@ -173,9 +183,13 @@ async function reconcileTaskCard(
       audit(card, 'Retrying deferred task settlement from Host run record');
     }
     if (card.goalContract?.continueUntilVerified) {
-      return settleWithGoalContract(card, run, projector);
+      const settled = await settleWithGoalContract(card, run, projector);
+      if (settled && settled.column !== 'running') pending?.clear(card.id);
+      return settled;
     }
-    return projector.settleTask(card, run);
+    const settled = await projector.settleTask(card, run);
+    if (settled && settled.column !== 'running') pending?.clear(card.id);
+    return settled;
   }
 
   if (run.status === 'paused') {
