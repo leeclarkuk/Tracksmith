@@ -57,7 +57,7 @@ const NEGATED_SUBJECT_STOPWORDS = new Set([
 ]);
 
 const VIOLATION_SIGNALS =
-  /\b(fail(ed|s|ure)?|error|errors|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
+  /\b(fail(ed|s|ure|ures|ing)?|failure|failures|error|errors|found|detected|introduced|breaking|broke|lost|leaked|committed|violated|regressed|regression|missing|removed|unexpected)\b/i;
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -101,14 +101,14 @@ export function evaluateAcceptanceCriteria(
     const subject = needle.replace(/\b(no|not|without|never)\b/gi, ' ').replace(/\s+/g, ' ').trim();
     const subjectLower = subject.toLowerCase();
     const subjectTokens = subjectLower.split(/\s+/).filter((t) => t.length > 3);
-    const failureCriterion = /\bfail(ed|s|ure)?\b/i.test(subjectLower);
+    const failureCriterion = /\bfail(ed|s|ure|ures|ing)?\b/i.test(subjectLower);
     const passCriterion = /\bpass(ed|es)?\b/i.test(subjectLower);
 
     let matched: boolean;
     if (negated) {
       let prohibited = false;
       if (failureCriterion || /\berror/i.test(subjectLower)) {
-        prohibited = matchWithoutLeadingNegation(lower, /\b(error|fail(ed|s|ure)?)\b/i);
+        prohibited = matchWithoutLeadingNegation(lower, /\b(error|fail(ed|s|ure|ures|ing)?|failure|failures)\b/i);
       } else if (passCriterion) {
         prohibited = matchWithoutLeadingNegation(lower, /\bfail(ed|s|ure)?\b/i);
       } else if (subjectTokens.length > 0) {

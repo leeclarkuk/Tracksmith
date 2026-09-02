@@ -128,6 +128,7 @@ export function registerRoutes(
     if (!card) return notFound(reply, 'Card not found');
     try {
       const updated = await router.run(card);
+      if (!updated) return notFound(reply, 'Card not found');
       broadcast();
       return updated;
     } catch (err) {

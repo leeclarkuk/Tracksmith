@@ -45,6 +45,14 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(checks[0]?.passed).toBe(false);
   });
 
+  it('fails no test failures criterion when steps failed', () => {
+    const checks = evaluateAcceptanceCriteria(
+      ['no test failures'],
+      'Run unit tests FAILED 3 assertions failed in checkout',
+    );
+    expect(checks[0]?.passed).toBe(false);
+  });
+
   it('fails when criterion missing', () => {
     const checks = evaluateAcceptanceCriteria(['database migrated'], 'Updated README only');
     expect(checks[0]?.passed).toBe(false);

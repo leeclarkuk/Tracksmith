@@ -55,8 +55,7 @@ export async function settleWithGoalContract(
   if (!settled || settled.column === 'running') return settled ?? card;
   const corpus = buildCorpus(settled, run);
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
-  const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
-  const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
+  const passed = allChecksPassed(settled.resultPacket!.checks);
   return evaluateGoalContractLimits(settled, passed, isHostRunSuccessful(run));
 }
 
@@ -80,8 +79,7 @@ export async function settleChatWithGoalContract(
 
   const corpus = buildCorpus(settled, null, settled.resultPacket?.finalSummary ?? '');
   settled.resultPacket!.checks = mergeAcceptanceChecks(settled.resultPacket!.checks, contract, corpus);
-  const acceptance = evaluateAcceptanceCriteria(contract.acceptanceCriteria, corpus);
-  const passed = allChecksPassed(acceptance.length ? acceptance : settled.resultPacket!.checks);
+  const passed = allChecksPassed(settled.resultPacket!.checks);
   return evaluateGoalContractLimits(settled, passed, true);
 }
 
@@ -121,6 +119,7 @@ export function evaluateGoalContractLimits(
   settled.column = 'todo';
   settled.failureReason = undefined;
   settled.settledAt = undefined;
+  settled.runRef = undefined;
   settled.resultPacket!.nextActions = [
     'Acceptance criteria not met. Auto-retry scheduled.',
     ...settled.resultPacket!.nextActions,

@@ -25,6 +25,12 @@ function hasDeferredSettlement(card: OutcomeCard): boolean {
   );
 }
 
+function isChatRunStale(card: OutcomeCard): boolean {
+  const attemptStart = card.goalContract?.attemptStartedAt ?? card.audit.find((a) => a.kind === 'run_started')?.at;
+  if (!attemptStart) return false;
+  return Date.now() - new Date(attemptStart).getTime() > 5 * 60 * 1000;
+}
+
 export async function reconcileRunningCards(
   store: CardStore,
   gateway: GatewayClient,
@@ -110,7 +116,7 @@ async function reconcileChatCard(
     return null;
   }
   if (historyResult.status === 'ok') {
-    const shouldSettle = settleFromHistory || hasDeferredSettlement(card);
+    const shouldSettle = settleFromHistory || hasDeferredSettlement(card) || isChatRunStale(card);
     const last = historyResult.data![historyResult.data!.length - 1];
     if (shouldSettle && last?.role === 'assistant') {
       audit(
@@ -119,7 +125,7 @@ async function reconcileChatCard(
           ? 'Retrying deferred chat settlement from slot history'
           : settleFromHistory
             ? 'Settling chat from slot history on startup'
-            : 'Settling missed chat completion from slot history on reconnect',
+            : 'Settling stale chat run from slot history',
       );
       if (card.goalContract?.continueUntilVerified) {
         return settleChatWithGoalContract(card, projector, false);
