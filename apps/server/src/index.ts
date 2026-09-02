@@ -45,6 +45,18 @@ const app = Fastify({
   },
 });
 
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  if (body === '' || body == null) {
+    done(null, {});
+    return;
+  }
+  try {
+    done(null, JSON.parse(body as string));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
 await app.register(cors, { origin: config.corsOrigin });
 registerAuth(app, config);
 registerRoutes(app, store, gateway, router, broadcast);

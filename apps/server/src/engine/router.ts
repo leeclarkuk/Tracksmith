@@ -43,7 +43,7 @@ export class EngineRouter {
           current.audit.push({
             id: nanoid(),
             at: new Date().toISOString(),
-            kind: 'run_started',
+            kind: 'recovery',
             message: 'Run blocked: Host unreachable',
           });
           return current;
@@ -53,7 +53,7 @@ export class EngineRouter {
           current.audit.push({
             id: nanoid(),
             at: new Date().toISOString(),
-            kind: 'run_started',
+            kind: 'recovery',
             message: 'Run blocked: Task Runner unavailable',
           });
           return current;
@@ -92,14 +92,12 @@ export class EngineRouter {
         }
       } catch (err) {
         this.pending.clear(current.id);
-        current.column = 'failed';
         current.failureReason = err instanceof Error ? err.message : 'Run dispatch failed';
-        current.settledAt = new Date().toISOString();
         current.audit.push({
           id: nanoid(),
           at: new Date().toISOString(),
-          kind: 'settled',
-          message: current.failureReason,
+          kind: 'recovery',
+          message: `Run dispatch failed: ${current.failureReason}`,
         });
         return current;
       }
