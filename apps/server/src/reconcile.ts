@@ -37,12 +37,6 @@ function currentAttemptStart(card: OutcomeCard): string | undefined {
   );
 }
 
-function isChatRunStale(card: OutcomeCard): boolean {
-  const attemptStart = currentAttemptStart(card);
-  if (!attemptStart) return false;
-  return Date.now() - new Date(attemptStart).getTime() > 5 * 60 * 1000;
-}
-
 export async function reconcileRunningCards(
   store: CardStore,
   gateway: GatewayClient,
@@ -77,7 +71,7 @@ export async function reconcileRunningCards(
       }
 
       if (card.runRef.kind === 'chat' && card.runRef.slotId) {
-        return reconcileChatCard(card, gateway, projector, options.settleChatFromHistory === true, options.pending);
+        return reconcileChatCard(card, gateway, projector, options.pending);
       }
 
       if (card.runRef.kind === 'task_runner' && card.runRef.taskId) {
@@ -102,7 +96,6 @@ async function reconcileChatCard(
   card: OutcomeCard,
   gateway: GatewayClient,
   projector: Projector,
-  settleFromHistory: boolean,
   pending?: PendingRunRegistry,
 ): Promise<OutcomeCard | null> {
   const slotId = card.runRef!.slotId!;
@@ -123,33 +116,19 @@ async function reconcileChatCard(
     return card;
   }
 
-  const historyResult = await gateway.getSlotHistoryResult(slotId, 3);
-  if (historyResult.status === 'unreachable') {
+  if (!hasDeferredSettlement(card)) {
     return null;
   }
-  if (historyResult.status === 'ok') {
-    const shouldSettle = settleFromHistory || hasDeferredSettlement(card) || isChatRunStale(card);
-    const last = historyResult.data![historyResult.data!.length - 1];
-    if (shouldSettle && last?.role === 'assistant') {
-      audit(
-        card,
-        hasDeferredSettlement(card)
-          ? 'Retrying deferred chat settlement from slot history'
-          : settleFromHistory
-            ? 'Settling chat from slot history on startup'
-            : 'Settling stale chat run from slot history',
-      );
-      if (card.goalContract?.continueUntilVerified) {
-        const settled = await settleChatWithGoalContract(card, projector, false);
-        if (settled && settled.column !== 'running') pending?.clear(card.id);
-        return settled;
-      }
-      const settled = await projector.settleChat(card, false);
-      if (settled && settled.column !== 'running') pending?.clear(card.id);
-      return settled;
-    }
+
+  audit(card, 'Retrying deferred chat settlement from slot history');
+  if (card.goalContract?.continueUntilVerified) {
+    const settled = await settleChatWithGoalContract(card, projector, false);
+    if (settled && settled.column !== 'running') pending?.clear(card.id);
+    return settled;
   }
-  return null;
+  const settled = await projector.settleChat(card, false);
+  if (settled && settled.column !== 'running') pending?.clear(card.id);
+  return settled;
 }
 
 async function reconcileTaskCard(
