@@ -25,12 +25,7 @@ function buildCorpus(card: OutcomeCard, run: TaskRunRecord | null, extra = ''): 
         .map((e) => `${e.label} ${e.value}`)
         .join('\n')
     : '';
-  return goalContractCorpus([
-    runSteps,
-    currentRunEvidence,
-    extra,
-    card.resultPacket?.finalSummary ?? '',
-  ]);
+  return goalContractCorpus([runSteps, currentRunEvidence, extra]);
 }
 
 export async function settleWithGoalContract(

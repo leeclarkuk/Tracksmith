@@ -129,6 +129,7 @@ export class GatewayClient {
     const body: Record<string, string> = { name };
     if (agent) body.agent = agent;
     const data = await this.request<{ id?: string; slot?: GatewaySlot } & GatewaySlot>('POST', '/api/slots', body);
+    if (!data) throw new Error('Gateway returned non-JSON body when creating slot');
     const slot = data.slot ?? data;
     if (!slot.id) throw new Error('Gateway did not return slot id');
     return slot;
@@ -210,7 +211,7 @@ export class GatewayClient {
   async startTaskRunner(spec: string): Promise<TaskRunRecord> {
     const inlineSpec = spec.startsWith('__inline__:') ? spec : `__inline__:${spec}`;
     const data = await this.request<TaskRunRecord>('POST', '/api/taskrunner', { spec: inlineSpec });
-    if (!data.task_id) throw new Error('Gateway did not return task_id');
+    if (!data?.task_id) throw new Error('Gateway returned non-JSON body or missing task_id');
     return data;
   }
 

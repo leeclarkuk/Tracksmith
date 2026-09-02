@@ -146,7 +146,18 @@ export function evaluateAcceptanceCriteria(
       const exactMatch = matchWithoutLeadingNegation(lower, new RegExp(lowerNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
       matched = exactMatch || fuzzyMatch;
       if (passCriterion) {
-        matched = matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) && !matchFailureOrError(lower);
+        const passSignal = matchWithoutLeadingNegation(lower, /\bpass(ed|es)?\b/i) && !matchFailureOrError(lower);
+        const subjectForPass = subjectLower.replace(/\bpass(ed|es)?\b/gi, ' ').replace(/\s+/g, ' ').trim();
+        const passSubjectTokens = subjectForPass.split(/\s+/).filter((t) => t.length > 3);
+        if (passSubjectTokens.length === 0) {
+          matched = false;
+        } else {
+          const passTokenHits = passSubjectTokens.filter((t) =>
+            matchWithoutLeadingNegation(lower, new RegExp(`\\b${escapeRegex(t)}\\b`, 'i')),
+          ).length;
+          const subjectMatch = passTokenHits >= Math.ceil(passSubjectTokens.length * 0.75);
+          matched = passSignal && subjectMatch;
+        }
       } else if (failureCriterion) {
         matched = matchFailureOrError(lower);
       }

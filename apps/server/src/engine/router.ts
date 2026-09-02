@@ -137,6 +137,7 @@ export class EngineRouter {
   }
 
   async correct(card: OutcomeCard, instruction: string): Promise<OutcomeCard> {
+    let redispatch = false;
     return this.store.mutate(card.id, async (current) => {
       if (current.column === 'running') {
         throw new Error('Cannot correct while agent is working');
@@ -195,14 +196,25 @@ export class EngineRouter {
           return current;
         } catch {
           current.prompt = `${current.prompt}\n\nCorrection: ${instruction}`;
+          if (current.column === 'todo') {
+            redispatch = true;
+          } else {
+            const retryHint = 'Correction could not reach the Host; move to To Do and press Run to retry';
+            if (current.resultPacket && !current.resultPacket.nextActions.includes(retryHint)) {
+              current.resultPacket.nextActions = [...current.resultPacket.nextActions, retryHint];
+            }
+          }
         }
       } else {
         current.prompt = `${current.prompt}\n\nCorrection: ${instruction}`;
+        if (current.column === 'todo') {
+          redispatch = true;
+        }
       }
 
       return current;
     }).then(async (updated) => {
-      if (updated && updated.column === 'todo' && updated.prompt.includes('Correction:')) {
+      if (redispatch && updated) {
         return this.run(updated);
       }
       return updated ?? card;

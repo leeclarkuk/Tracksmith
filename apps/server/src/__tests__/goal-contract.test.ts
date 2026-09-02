@@ -78,6 +78,12 @@ describe('evaluateAcceptanceCriteria', () => {
     expect(evaluateAcceptanceCriteria(['no errors'], '3 errors found in the console output')[0]?.passed).toBe(false);
   });
 
+  it('does not pass pass-style criteria without subject evidence', () => {
+    const corpus = 'Step 1 PASSED Update README / wrote docs / Task completed: 1/1 steps passed';
+    expect(evaluateAcceptanceCriteria(['unit tests pass'], corpus)[0]?.passed).toBe(false);
+    expect(evaluateAcceptanceCriteria(['integration tests pass'], corpus)[0]?.passed).toBe(false);
+  });
+
   it('fails when criterion missing', () => {
     const checks = evaluateAcceptanceCriteria(['database migrated'], 'Updated README only');
     expect(checks[0]?.passed).toBe(false);
