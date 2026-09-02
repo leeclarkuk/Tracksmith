@@ -3,6 +3,7 @@ import type { CardStore } from './db/store.js';
 import type { GatewayClient } from './gateway/client.js';
 import { Projector } from './gateway/projector.js';
 import { settleWithGoalContract, shouldAutoRetryGoal } from './goal-eval.js';
+import type { PendingRunRegistry } from './pending-runs.js';
 import type { EngineRouter } from './engine/router.js';
 import { isGoalContractElapsed } from './goal-contract.js';
 
@@ -27,7 +28,7 @@ export async function reconcileRunningCards(
   store: CardStore,
   gateway: GatewayClient,
   projector: Projector,
-  options: { settleChatFromHistory?: boolean; router?: EngineRouter } = {},
+  options: { settleChatFromHistory?: boolean; router?: EngineRouter; pending?: PendingRunRegistry } = {},
 ): Promise<number> {
   const gatewayStatus = await gateway.getStatus();
   if (!gatewayStatus.ok) {
@@ -57,11 +58,11 @@ export async function reconcileRunningCards(
       }
 
       if (card.runRef.kind === 'chat' && card.runRef.slotId) {
-        return reconcileChatCard(card, gateway, projector, options.settleChatFromHistory === true);
+        return reconcileChatCard(card, gateway, projector, options.settleChatFromHistory === true, options.pending);
       }
 
       if (card.runRef.kind === 'task_runner' && card.runRef.taskId) {
-        return reconcileTaskCard(card, gateway, projector);
+        return reconcileTaskCard(card, gateway, projector, options.pending);
       }
 
       return null;
@@ -83,6 +84,7 @@ async function reconcileChatCard(
   gateway: GatewayClient,
   projector: Projector,
   settleFromHistory: boolean,
+  pending?: PendingRunRegistry,
 ): Promise<OutcomeCard | null> {
   const slotId = card.runRef!.slotId!;
   const slotsResult = await gateway.listSlotsResult();
@@ -97,6 +99,7 @@ async function reconcileChatCard(
   if (!slot) {
     card.column = 'todo';
     card.runRef = undefined;
+    pending?.clear(card.id);
     audit(card, 'Orphaned chat run: slot confirmed missing; reverted to todo');
     return card;
   }
@@ -126,6 +129,7 @@ async function reconcileTaskCard(
   card: OutcomeCard,
   gateway: GatewayClient,
   projector: Projector,
+  pending?: PendingRunRegistry,
 ): Promise<OutcomeCard | null> {
   const taskId = card.runRef!.taskId!;
   const runResult = await gateway.getTaskRunResult(taskId);
@@ -137,6 +141,7 @@ async function reconcileTaskCard(
   if (runResult.status === 'not_found') {
     card.column = 'todo';
     card.runRef = undefined;
+    pending?.clear(card.id);
     audit(card, 'Orphaned task run: Host record confirmed missing; reverted to todo');
     return card;
   }

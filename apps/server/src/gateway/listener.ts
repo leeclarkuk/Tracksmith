@@ -190,14 +190,7 @@ export class GatewayListener {
         return;
       }
       await this.store.mutate(cardId, async (card) => {
-        if (card.column !== 'running') {
-          if (!card.runRef?.taskId) {
-            card.column = 'running';
-            card.runRef = { kind: 'task_runner', taskId, sessionKey: `taskrunner:${taskId}` };
-          } else {
-            return null;
-          }
-        }
+        if (card.column !== 'running') return null;
         const runResult = await this.gateway.getTaskRunResult(taskId);
         if (runResult.status === 'unreachable' || runResult.status === 'error' || runResult.status === 'not_found') {
           card.audit.push({

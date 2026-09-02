@@ -65,6 +65,7 @@ async function runReconcile(startup = false): Promise<void> {
   const reconciled = await reconcileRunningCards(store, gateway, projector, {
     settleChatFromHistory: startup,
     router,
+    pending,
   });
   if (reconciled > 0) {
     console.log(`[reconcile] updated ${reconciled} running card(s)`);
